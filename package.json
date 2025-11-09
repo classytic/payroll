@@ -1,0 +1,59 @@
+{
+  "name": "@classytic/payroll",
+  "version": "1.0.0",
+  "description": "Modern HRM and payroll management library for Node.js applications",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./init": "./src/init.js",
+    "./service": "./src/service.js",
+    "./adapters/*": "./src/adapters/*.js",
+    "./events/*": "./src/events/*.js",
+    "./workflows/*": "./src/workflows/*.js",
+    "./schemas/*": "./src/schemas/*.js"
+  },
+  "files": [
+    "src/**/*.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "hrm",
+    "payroll",
+    "employee",
+    "management",
+    "attendance",
+    "leave",
+    "salary",
+    "nodejs",
+    "mongoose"
+  ],
+  "author": "Sadman Chowdhury",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/classytic/payroll.git"
+  },
+  "bugs": {
+    "url": "https://github.com/classytic/payroll/issues"
+  },
+  "homepage": "https://github.com/classytic/payroll#readme",
+  "peerDependencies": {
+    "mongoose": "^8.0.0"
+  },
+  "devDependencies": {
+    "mongoose": "^8.0.0",
+    "mongoose-paginate-v2": "^1.8.0",
+    "mongoose-aggregate-paginate-v2": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "example:basic": "node test/examples/basic-usage.js",
+    "example:mongoose": "node test/examples/with-mongoose.js",
+    "example:workflow": "node test/examples/full-workflow.js",
+    "test": "npm run example:basic && npm run example:mongoose && npm run example:workflow"
+  }
+}
