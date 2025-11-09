@@ -4,6 +4,7 @@
   "description": "Modern HRM and payroll management library for Node.js applications",
   "type": "module",
   "main": "./src/index.js",
+  "types": "./payroll.d.ts",
   "exports": {
     ".": "./src/index.js",
     "./init": "./src/init.js",
@@ -15,6 +16,7 @@
   },
   "files": [
     "src/**/*.js",
+    "payroll.d.ts",
     "README.md",
     "LICENSE"
   ],
@@ -43,9 +45,9 @@
     "mongoose": "^8.0.0"
   },
   "devDependencies": {
-    "mongoose": "^8.0.0",
-    "mongoose-paginate-v2": "^1.8.0",
-    "mongoose-aggregate-paginate-v2": "^1.1.0"
+    "mongoose": "^8.8.1",
+    "mongoose-aggregate-paginate-v2": "^1.1.4",
+    "mongoose-paginate-v2": "^1.9.0"
   },
   "engines": {
     "node": ">=18.0.0"
