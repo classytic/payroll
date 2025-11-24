@@ -1,6 +1,8 @@
 /**
  * Payroll Factory - Beautiful Salary Calculation & Record Creation
  * Clean, testable, immutable payroll object creation
+ *
+ * Compatible with Mongoose v8 and v9
  */
 
 import {
@@ -12,7 +14,66 @@ import {
 
 import { getPayPeriod } from '../utils/date.utils.js';
 
+/**
+ * @typedef {Object} AllowanceInput
+ * @property {string} type - Type of allowance
+ * @property {string} [name] - Display name for the allowance
+ * @property {number} value - Allowance value (amount or percentage)
+ * @property {boolean} [isPercentage=false] - Whether value is a percentage
+ */
+
+/**
+ * @typedef {Object} DeductionInput
+ * @property {string} type - Type of deduction
+ * @property {string} [name] - Display name for the deduction
+ * @property {number} value - Deduction value (amount or percentage)
+ * @property {boolean} [isPercentage=false] - Whether value is a percentage
+ */
+
+/**
+ * @typedef {Object} PeriodInput
+ * @property {number} [month] - Month (1-12)
+ * @property {number} [year] - Year
+ */
+
+/**
+ * @typedef {Object} PayrollMetadata
+ * @property {string} [currency='BDT'] - Currency code
+ * @property {string} [paymentMethod] - Payment method
+ * @property {string} [notes] - Additional notes
+ */
+
+/**
+ * @typedef {Object} PayrollRecord
+ * @property {string} employeeId - Employee identifier
+ * @property {string} organizationId - Organization identifier
+ * @property {Object} period - Pay period information
+ * @property {Object} breakdown - Salary breakdown
+ * @property {number} breakdown.baseAmount - Base salary amount
+ * @property {Array} breakdown.allowances - Calculated allowances
+ * @property {Array} breakdown.deductions - Calculated deductions
+ * @property {number} breakdown.grossSalary - Gross salary
+ * @property {number} breakdown.netSalary - Net salary after deductions
+ * @property {string} status - Payroll status ('pending', 'processed', 'paid')
+ * @property {Date|null} processedAt - When payroll was processed
+ * @property {Date|null} paidAt - When payment was made
+ * @property {PayrollMetadata} metadata - Additional metadata
+ */
+
 export class PayrollFactory {
+  /**
+   * Create a new payroll record
+   *
+   * @param {Object} params - Payroll parameters
+   * @param {string} params.employeeId - Employee ID
+   * @param {string} params.organizationId - Organization ID
+   * @param {number} params.baseAmount - Base salary amount
+   * @param {AllowanceInput[]} [params.allowances=[]] - Allowances array
+   * @param {DeductionInput[]} [params.deductions=[]] - Deductions array
+   * @param {PeriodInput} [params.period={}] - Pay period
+   * @param {PayrollMetadata} [params.metadata={}] - Additional metadata
+   * @returns {PayrollRecord} Payroll record object
+   */
   static create({
     employeeId,
     organizationId,
@@ -50,6 +111,14 @@ export class PayrollFactory {
     };
   }
 
+  /**
+   * Create a pay period object
+   *
+   * @param {PeriodInput} [params={}] - Period parameters
+   * @param {number} [params.month] - Month (defaults to current month)
+   * @param {number} [params.year] - Year (defaults to current year)
+   * @returns {Object} Pay period object with startDate, endDate, etc.
+   */
   static createPeriod({ month, year } = {}) {
     const now = new Date();
     return getPayPeriod(
@@ -58,6 +127,13 @@ export class PayrollFactory {
     );
   }
 
+  /**
+   * Calculate allowances from base amount and allowance inputs
+   *
+   * @param {number} baseAmount - Base salary amount
+   * @param {AllowanceInput[]} allowances - Array of allowances
+   * @returns {Array} Calculated allowances with amounts
+   */
   static calculateAllowances(baseAmount, allowances) {
     return allowances.map((allowance) => {
       const amount = allowance.isPercentage
@@ -74,6 +150,13 @@ export class PayrollFactory {
     });
   }
 
+  /**
+   * Calculate deductions from base amount and deduction inputs
+   *
+   * @param {number} baseAmount - Base salary amount
+   * @param {DeductionInput[]} deductions - Array of deductions
+   * @returns {Array} Calculated deductions with amounts
+   */
   static calculateDeductions(baseAmount, deductions) {
     return deductions.map((deduction) => {
       const amount = deduction.isPercentage
@@ -90,6 +173,16 @@ export class PayrollFactory {
     });
   }
 
+  /**
+   * Create a bonus object
+   *
+   * @param {Object} params - Bonus parameters
+   * @param {string} params.type - Bonus type
+   * @param {number} params.amount - Bonus amount
+   * @param {string} params.reason - Reason for bonus
+   * @param {string} params.approvedBy - User who approved the bonus
+   * @returns {Object} Bonus object
+   */
   static createBonus({ type, amount, reason, approvedBy }) {
     return {
       type,
@@ -100,6 +193,16 @@ export class PayrollFactory {
     };
   }
 
+  /**
+   * Create a deduction object
+   *
+   * @param {Object} params - Deduction parameters
+   * @param {string} params.type - Deduction type
+   * @param {number} params.amount - Deduction amount
+   * @param {string} params.reason - Reason for deduction
+   * @param {string} params.appliedBy - User who applied the deduction
+   * @returns {Object} Deduction object
+   */
   static createDeduction({ type, amount, reason, appliedBy }) {
     return {
       type,
@@ -110,6 +213,16 @@ export class PayrollFactory {
     };
   }
 
+  /**
+   * Mark a payroll record as paid (immutable - returns new object)
+   *
+   * @param {PayrollRecord} payroll - Payroll record to mark as paid
+   * @param {Object} [params={}] - Payment details
+   * @param {Date} [params.paidAt] - Payment date (defaults to now)
+   * @param {string} [params.transactionId] - Transaction ID
+   * @param {string} [params.paymentMethod] - Payment method
+   * @returns {PayrollRecord} New payroll record marked as paid
+   */
   static markAsPaid(payroll, { paidAt = new Date(), transactionId, paymentMethod } = {}) {
     return {
       ...payroll,
@@ -124,6 +237,14 @@ export class PayrollFactory {
     };
   }
 
+  /**
+   * Mark a payroll record as processed (immutable - returns new object)
+   *
+   * @param {PayrollRecord} payroll - Payroll record to mark as processed
+   * @param {Object} [params={}] - Processing details
+   * @param {Date} [params.processedAt] - Processing date (defaults to now)
+   * @returns {PayrollRecord} New payroll record marked as processed
+   */
   static markAsProcessed(payroll, { processedAt = new Date() } = {}) {
     return {
       ...payroll,
@@ -133,6 +254,18 @@ export class PayrollFactory {
   }
 }
 
+/**
+ * PayrollBuilder - Fluent builder pattern for creating payroll records
+ *
+ * @example
+ * const payroll = createPayroll()
+ *   .forEmployee('emp-123')
+ *   .inOrganization('org-456')
+ *   .withBaseAmount(50000)
+ *   .addAllowance('housing', 10000)
+ *   .addDeduction('tax', 15, true)
+ *   .build();
+ */
 export class PayrollBuilder {
   constructor() {
     this.data = {
@@ -203,12 +336,34 @@ export class PayrollBuilder {
   }
 }
 
+/**
+ * Create a new PayrollBuilder instance
+ *
+ * @returns {PayrollBuilder} New builder instance
+ */
 export const createPayroll = () => new PayrollBuilder();
 
 /**
- * Batch Payroll Factory - Process multiple employees
+ * BatchPayrollFactory - Process payroll for multiple employees at once
+ *
+ * @example
+ * const payrolls = BatchPayrollFactory.createBatch(employees, {
+ *   month: 1,
+ *   year: 2025,
+ *   organizationId: 'org-123'
+ * });
  */
 export class BatchPayrollFactory {
+  /**
+   * Create payroll records for multiple employees
+   *
+   * @param {Array} employees - Array of employee objects
+   * @param {Object} params - Batch parameters
+   * @param {number} params.month - Month for payroll
+   * @param {number} params.year - Year for payroll
+   * @param {string} params.organizationId - Organization ID
+   * @returns {PayrollRecord[]} Array of payroll records
+   */
   static createBatch(employees, { month, year, organizationId }) {
     return employees.map((employee) =>
       PayrollFactory.create({
@@ -222,6 +377,17 @@ export class BatchPayrollFactory {
     );
   }
 
+  /**
+   * Calculate total payroll amounts across multiple records
+   *
+   * @param {PayrollRecord[]} payrolls - Array of payroll records
+   * @returns {Object} Totals summary
+   * @returns {number} return.count - Total number of payrolls
+   * @returns {number} return.totalGross - Sum of gross salaries
+   * @returns {number} return.totalNet - Sum of net salaries
+   * @returns {number} return.totalAllowances - Sum of all allowances
+   * @returns {number} return.totalDeductions - Sum of all deductions
+   */
   static calculateTotalPayroll(payrolls) {
     return payrolls.reduce(
       (totals, payroll) => ({

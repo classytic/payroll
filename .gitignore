@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
-package-lock.json
+
+# Package managers (keep package-lock.json for reproducible builds)
 yarn.lock
 pnpm-lock.yaml
 
@@ -29,10 +30,12 @@ pnpm-debug.log*
 coverage/
 .nyc_output/
 
-# Build outputs
-dist/
+# Build outputs (except type definitions which are tracked)
 build/
 *.tsbuildinfo
+
+# Auto-generated types (will be built on prepublish)
+dist/
 
 # OS
 .DS_Store

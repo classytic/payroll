@@ -4,18 +4,31 @@
   "description": "Modern HRM and payroll management library for Node.js applications",
   "type": "module",
   "main": "./src/index.js",
-  "types": "./payroll.d.ts",
+  "types": "./dist/types/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./init": "./src/init.js",
-    "./service": "./src/service.js",
-    "./adapters/*": "./src/adapters/*.js",
-    "./events/*": "./src/events/*.js",
-    "./workflows/*": "./src/workflows/*.js",
-    "./schemas/*": "./src/schemas/*.js"
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./init": {
+      "types": "./dist/types/init.d.ts",
+      "import": "./src/init.js"
+    },
+    "./service": {
+      "types": "./dist/types/service.d.ts",
+      "import": "./src/service.js"
+    },
+    "./schemas/*": {
+      "types": "./dist/types/schemas/*.d.ts",
+      "import": "./src/schemas/*.js"
+    }
   },
   "files": [
     "src/**/*.js",
+    "!src/**/*.test.js",
+    "!src/**/*.spec.js",
+    "!src/**/__tests__/**",
+    "dist/types/",
     "payroll.d.ts",
     "README.md",
     "LICENSE"
@@ -42,20 +55,26 @@
   },
   "homepage": "https://github.com/classytic/payroll#readme",
   "peerDependencies": {
-    "mongoose": "^8.0.0"
+    "mongoose": "^8.0.0 || ^9.0.0"
   },
   "devDependencies": {
-    "mongoose": "^8.8.1",
+    "mongoose": "^9.0.0",
     "mongoose-aggregate-paginate-v2": "^1.1.4",
-    "mongoose-paginate-v2": "^1.9.0"
+    "mongoose-paginate-v2": "^1.9.0",
+    "@types/node": "^22.8.7",
+    "typescript": "^5.6.3"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
+    "types": "tsc --project tsconfig.types.json",
+    "build": "npm run types",
+    "prepublishOnly": "npm run build",
     "example:basic": "node test/examples/basic-usage.js",
     "example:mongoose": "node test/examples/with-mongoose.js",
     "example:workflow": "node test/examples/full-workflow.js",
-    "test": "npm run example:basic && npm run example:mongoose && npm run example:workflow"
+    "test:v9": "node test/employee-plugin-v9.test.js",
+    "test": "npm run example:basic && npm run example:mongoose && npm run example:workflow && npm run test:v9"
   }
 }

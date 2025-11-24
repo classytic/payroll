@@ -3,6 +3,27 @@ import logger, { setLogger } from './utils/logger.js';
 
 let initialized = false;
 
+/**
+ * Initialize HRM/Payroll framework
+ *
+ * @param {Object} options - Initialization options
+ * @param {Model} options.EmployeeModel - Employee model (required)
+ * @param {Model} options.PayrollRecordModel - Payroll record model (required)
+ * @param {Model} options.TransactionModel - Transaction model (required)
+ * @param {Model} options.AttendanceModel - Optional attendance model for integration
+ * @param {Object} options.logger - Optional custom logger
+ *
+ * @example Multi-Tenant (default)
+ * initializeHRM({
+ *   EmployeeModel,
+ *   PayrollRecordModel,
+ *   TransactionModel
+ * });
+ *
+ * @example Single-Tenant
+ * // For single-tenant apps, add organizationId with default value in your Employee schema:
+ * // organizationId: { type: ObjectId, required: true, default: () => FIXED_ORG_ID }
+ */
 export function initializeHRM({ EmployeeModel, PayrollRecordModel, TransactionModel, AttendanceModel = null, logger: customLogger }) {
   // Allow users to inject their own logger
   if (customLogger) {

@@ -136,11 +136,18 @@ export function employeePlugin(schema, options = {}) {
     });
   };
 
-  schema.pre('save', function(next) {
+  /**
+   * Pre-save hook to automatically update salary calculations
+   * when compensation is modified.
+   *
+   * Mongoose v9 compatible - uses async function without next callback
+   * - Use throw instead of next(err) for errors
+   * - Use return instead of return next()
+   */
+  schema.pre('save', async function() {
     if (this.isModified('compensation')) {
       this.updateSalaryCalculations();
     }
-    next();
   });
 
   schema.index({ organizationId: 1, employeeId: 1 }, { unique: true });
