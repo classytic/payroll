@@ -1,16 +1,24 @@
-# Test files
-*.test.js
-*.spec.js
-test/
-tests/
-__tests__/
-**/__tests__/
+# Source files (we publish only dist/)
+src/
 
-# Documentation (kept on GitHub only)
+# Test files
+tests/
+*.test.ts
+*.spec.ts
+__tests__/
+
+# Documentation (kept on GitHub, not in npm package)
 docs/
-examples/
-*.md
-!README.md
+NPM_GUIDE.md
+DEVELOPMENT.md
+INTEGRATION.md
+
+# Config files
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+.eslintrc*
+.prettierrc*
 
 # Development files
 .github/
@@ -20,20 +28,18 @@ examples/
 .DS_Store
 .env
 .env.*
-tsconfig.json
 
 # Source control
-.git
+.git/
 .gitignore
 .gitattributes
 
-# Build artifacts
+# Build artifacts not needed in package
 *.tgz
 node_modules/
 coverage/
 .nyc_output/
-build/
 
-# Keep dist/types/ but exclude other dist content
-dist/*
-!dist/types/
+# Source maps (optional - remove these lines if you want source maps in package)
+# *.map
+# *.js.map

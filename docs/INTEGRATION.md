@@ -1,140 +1,146 @@
-# 🔗 HRM Library Integration Guide
+# Integration Guide
 
 ## Attendance Integration (Optional)
 
-The HRM library can optionally integrate with an Attendance system for automatic payroll deductions based on employee work days.
+The `@classytic/payroll` library can optionally integrate with an Attendance system for automatic payroll deductions based on employee work days.
 
 ---
 
-## 📋 **Integration Contract**
+## Integration Contract
 
-### **Required Fields in AttendanceModel**
+### Required Fields in AttendanceModel
 
 If you want to enable attendance-based payroll calculations, your `AttendanceModel` **MUST** have these fields:
 
-```javascript
-{
+```typescript
+interface AttendanceRecord {
   // Multi-tenancy
-  tenantId: ObjectId,          // Organization ID (required)
+  tenantId: ObjectId;          // Organization ID (required)
 
   // Polymorphic target reference
-  targetModel: String,         // Model name, must include 'Employee'
-  targetId: ObjectId,          // Reference to Employee._id
+  targetModel: string;         // Model name, must include 'Employee'
+  targetId: ObjectId;          // Reference to Employee._id
 
   // Time period (one document per month)
-  year: Number,                // Year (e.g., 2024)
-  month: Number,               // Month (1-12)
+  year: number;                // Year (e.g., 2024)
+  month: number;               // Month (1-12)
 
   // Payroll calculation (MOST IMPORTANT!)
-  totalWorkDays: Number,       // Total days worked (including half days)
-                               // Formula: fullDays + (halfDays * 0.5) + paidLeaveDays
+  totalWorkDays: number;       // Total days worked (including half days)
+                               // Formula: fullDays + (halfDays × 0.5) + paidLeaveDays
 }
 ```
 
 ---
 
-## ✅ **Using @classytic/payroll (Recommended)**
+## Setup with @classytic/payroll
 
-The `@classytic/payroll` library is **already compatible** and provides all required fields:
-
-### **Installation**
+### Installation
 
 ```bash
-npm install @classytic/payroll
+npm install @classytic/payroll mongoose
 ```
 
-### **Setup**
+### Initialize with Attendance
 
-```javascript
-// bootstrap/hrm.js
-import { initializeHRM } from '@fitverse/hrm';
-import { initializeAttendance } from '@classytic/payroll';
-import Employee from './models/Employee.js';
-import PayrollRecord from '@fitverse/hrm/models/payroll-record.model.js';
-import Transaction from './models/Transaction.js';
-import AttendanceModel from '@classytic/payroll/models/attendance.model.js';
+```typescript
+import { createPayrollInstance } from '@classytic/payroll';
+import mongoose from 'mongoose';
 
-// 1. Initialize Attendance library
-initializeAttendance({ AttendanceModel });
+// Your models
+const EmployeeModel = mongoose.model('Employee', employeeSchema);
+const PayrollRecordModel = mongoose.model('PayrollRecord', payrollRecordSchema);
+const TransactionModel = mongoose.model('Transaction', transactionSchema);
+const AttendanceModel = mongoose.model('Attendance', attendanceSchema);
 
-// 2. Initialize HRM with attendance integration
-initializeHRM({
-  EmployeeModel: Employee,
-  PayrollRecordModel: PayrollRecord,
-  TransactionModel: Transaction,
-  AttendanceModel: AttendanceModel  // ✅ Enable integration
-});
+// Initialize with attendance integration
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+    AttendanceModel,  // ✅ Enable integration
+  })
+  .withConfig({
+    payroll: {
+      attendanceIntegration: true,
+    },
+  })
+  .build();
 ```
 
 ---
 
-## 🎯 **How It Works**
+## How It Works
 
-### **Automatic Payroll Deductions**
+### Automatic Payroll Deductions
 
-When `AttendanceModel` is provided, payroll processing **automatically**:
+When `AttendanceModel` is provided and `attendanceIntegration` is enabled:
 
 1. **Fetches attendance record** for the employee's pay period
 2. **Reads `totalWorkDays`** from the attendance document
 3. **Calculates absent days**: `totalDays - totalWorkDays`
 4. **Applies deduction**: `absentDays × dailyRate`
 
-### **Example**
+### Example
 
-```javascript
+```typescript
 // Employee with monthly salary of 50,000
-// Pay period: March 2024 (31 days)
-// Attendance record shows: totalWorkDays = 28.5 (28 full days + 1 half day)
+// Pay period: March 2025 (31 days)
+// Attendance record shows: totalWorkDays = 28.5 (28 full + 1 half day)
 
 // Automatic calculation:
-const absentDays = 31 - 28.5; // 2.5 days
-const dailyRate = 50000 / 31; // ~1,612.90
-const deduction = 2.5 × 1612.90; // ~4,032.25
+const absentDays = 31 - 28.5;     // 2.5 days
+const dailyRate = 50000 / 31;     // ~1,612.90
+const deduction = 2.5 * 1612.90;  // ~4,032.25
 
-// Final payroll: 50,000 - 4,032.25 = 45,967.75
+// Final payroll breakdown:
+// Base: 50,000
+// Attendance Deduction: -4,032.25
+// Net: 45,967.75
 ```
 
 ---
 
-## 🔧 **Custom Attendance System**
+## Custom Attendance System
 
-If you're using your **own attendance system**, ensure your model includes:
+If you're using your own attendance system, ensure your model includes:
 
-### **Minimal Schema**
+### Minimal Schema
 
-```javascript
+```typescript
 import mongoose from 'mongoose';
 
 const customAttendanceSchema = new mongoose.Schema({
   tenantId: {
     type: mongoose.Schema.Types.ObjectId,
-    required: true
+    required: true,
   },
   targetModel: {
     type: String,
     required: true,
-    enum: ['Employee', 'Membership', 'User']  // Must include 'Employee'
+    enum: ['Employee', 'Membership', 'User'],  // Must include 'Employee'
   },
   targetId: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
-    refPath: 'targetModel'
+    refPath: 'targetModel',
   },
   year: {
     type: Number,
-    required: true
+    required: true,
   },
   month: {
     type: Number,
     required: true,
     min: 1,
-    max: 12
+    max: 12,
   },
   totalWorkDays: {
     type: Number,
     required: true,
     default: 0,
-    min: 0
+    min: 0,
   },
 
   // Optional but recommended:
@@ -155,38 +161,50 @@ export const CustomAttendance = mongoose.model('CustomAttendance', customAttenda
 
 ---
 
-## 🚫 **Disabling Attendance Integration**
+## Disabling Attendance Integration
 
 If you don't have an attendance system or don't want automatic deductions:
 
-```javascript
-// Simply omit AttendanceModel
-initializeHRM({
-  EmployeeModel: Employee,
-  PayrollRecordModel: PayrollRecord,
-  TransactionModel: Transaction,
-  // AttendanceModel: undefined  ← Not provided
-});
+```typescript
+// Option 1: Don't provide AttendanceModel
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+    // AttendanceModel not provided
+  })
+  .build();
 
-// OR set config flag
-import { HRM_CONFIG } from '@fitverse/hrm';
-
-HRM_CONFIG.payroll.attendanceIntegration = false;
+// Option 2: Disable via config
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+    AttendanceModel,
+  })
+  .withConfig({
+    payroll: {
+      attendanceIntegration: false,  // Disabled
+    },
+  })
+  .build();
 ```
 
 **Result:** Payroll will be calculated based on full base salary without attendance deductions.
 
 ---
 
-## 📚 **totalWorkDays Calculation Logic**
+## totalWorkDays Calculation Logic
 
 The `totalWorkDays` field should use this formula:
 
-```javascript
+```
 totalWorkDays = fullDays + (halfDays × 0.5) + paidLeaveDays
 ```
 
-### **Examples**
+### Examples
 
 | Full Days | Half Days | Paid Leave | Total Work Days |
 |-----------|-----------|------------|-----------------|
@@ -195,21 +213,21 @@ totalWorkDays = fullDays + (halfDays × 0.5) + paidLeaveDays
 | 15        | 4         | 2          | 19.0            |
 | 22        | 1         | 1          | 23.5            |
 
-**Note:** Unpaid leave and overtime are **NOT** included in `totalWorkDays` (overtime is counted separately).
+**Note:** Unpaid leave and overtime are **NOT** included in `totalWorkDays`.
 
 ---
 
-## 🔍 **Query Example**
+## Query Pattern
 
-HRM library queries attendance like this:
+The payroll library queries attendance like this:
 
-```javascript
+```typescript
 const attendance = await AttendanceModel.findOne({
   tenantId: organizationId,
   targetId: employeeId,
   targetModel: 'Employee',
-  year: 2024,
-  month: 3
+  year: 2025,
+  month: 3,
 });
 
 const workedDays = attendance?.totalWorkDays || 0;
@@ -219,7 +237,7 @@ const workedDays = attendance?.totalWorkDays || 0;
 
 ---
 
-## ✅ **Compatibility Checklist**
+## Compatibility Checklist
 
 Before enabling attendance integration, verify:
 
@@ -234,22 +252,86 @@ Before enabling attendance integration, verify:
 
 ---
 
-## 🚀 **Best Practice**
+## Framework Integration
 
-Use **@classytic/payroll** library for:
-- ✅ Pre-built attendance tracking
-- ✅ Automatic `totalWorkDays` calculation
-- ✅ Check-in/check-out management
-- ✅ Work types (full day, half day, paid leave, etc.)
-- ✅ Analytics and reporting
-- ✅ Multi-tenant support
-- ✅ **Zero integration work** - just plug and play!
+### Fastify Plugin
+
+```typescript
+import fastify from 'fastify';
+import { createPayrollInstance } from '@classytic/payroll';
+
+const app = fastify();
+
+app.register(async (instance) => {
+  const payroll = createPayrollInstance()
+    .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+    .build();
+
+  instance.decorate('payroll', payroll);
+});
+
+// Use in routes
+app.post('/employees', async (req, reply) => {
+  const employee = await app.payroll.hire(req.body);
+  return employee;
+});
+```
+
+### Express Middleware
+
+```typescript
+import express from 'express';
+import { createPayrollInstance } from '@classytic/payroll';
+
+const app = express();
+
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+  .build();
+
+app.use((req, res, next) => {
+  req.payroll = payroll;
+  next();
+});
+```
+
+### NestJS Provider
+
+```typescript
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Payroll, createPayrollInstance } from '@classytic/payroll';
+
+@Injectable()
+export class PayrollProvider implements OnModuleInit {
+  private payroll: Payroll;
+
+  constructor(
+    @InjectModel('Employee') private employeeModel,
+    @InjectModel('PayrollRecord') private payrollRecordModel,
+    @InjectModel('Transaction') private transactionModel,
+  ) {}
+
+  onModuleInit() {
+    this.payroll = createPayrollInstance()
+      .withModels({
+        EmployeeModel: this.employeeModel,
+        PayrollRecordModel: this.payrollRecordModel,
+        TransactionModel: this.transactionModel,
+      })
+      .build();
+  }
+
+  getPayroll() {
+    return this.payroll;
+  }
+}
+```
 
 ---
 
-## 📖 **Related Documentation**
+## Related Documentation
 
-- [@classytic/payroll README](../attendance/README.md)
-- [Attendance Model Schema](../attendance/models/attendance.model.js)
-- [Payroll Calculation Logic](./core/payroll.manager.js)
-- [HRM Configuration](./config.js)
+- [README.md](../README.md) - Main documentation
+- [DEVELOPMENT.md](./DEVELOPMENT.md) - Development guide
+- [NPM_GUIDE.md](../NPM_GUIDE.md) - Publishing workflow

@@ -1,574 +1,247 @@
-# 🎯 HRM Library - Human Resource Management
+# @classytic/payroll
 
-Modern, flexible, production-ready HRM system following Stripe/Passport.js architecture patterns.
+Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 
-## 🌟 Key Features
+[![npm version](https://badge.fury.io/js/@classytic%2Fpayroll.svg)](https://www.npmjs.com/package/@classytic/payroll)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-### Multi-Tenant Support
-- Same user can be employee in multiple organizations
-- Complete data isolation per tenant
-- Re-hiring support with full employment history
+## Why This Package?
 
-### Smart Payroll
-- **Pro-rated calculations** (mid-month hires)
-- **Attendance integration** (unpaid leave auto-deduction)
-- **Automatic deductions** (loans, advances, tax)
-- **Bulk payroll processing**
-- **Transaction integration** (seamless with existing system)
+- 🎯 **One clear way to do things** - No confusion, no multiple paths
+- ⚡ **Attendance built-in** - Uses `@classytic/clockin` natively
+- 🏢 **Multi-tenant & Single-tenant** - Both supported out of the box
+- 💰 **Smart calculations** - Pro-rating, tax, deductions, all automatic
+- 🧪 **Pure functions** - Test easily, preview without DB
+- 🔒 **Transaction-safe** - Atomic operations, no partial writes
+- 📦 **Zero config** - Works immediately with smart defaults
 
-### Data Retention
-- **Auto-deletion**: PayrollRecords expire after 2 years (MongoDB TTL)
-- **Export before deletion**: Required export for compliance
-- **Configurable retention**: Adjust via `HRM_CONFIG`
+## Installation
 
-### Flexible Architecture
-- **Reusable schemas**: Merge with your custom fields
-- **Plugin system**: Adds methods, virtuals, indexes
-- **Clean DSL**: `hrm.hire()`, `hrm.processSalary()`, `hrm.terminate()`
-- **Dependency injection**: Models injected at bootstrap
-
-## 📁 Structure
-
-```
-lib/hrm/
-├── index.js                    # Public exports
-├── init.js                     # Bootstrap initialization
-├── hrm.orchestrator.js         # Clean API (Stripe-like)
-├── enums.js                    # Single source of truth
-├── config.js                   # Configurable settings
-│
-├── models/
-│   └── payroll-record.model.js # Universal payroll ledger
-│
-├── schemas/
-│   └── employment.schema.js    # Reusable mongoose schemas
-│
-├── plugins/
-│   └── employee.plugin.js      # Mongoose plugin (methods/virtuals)
-│
-├── core/                       # Domain business logic
-│   ├── employment.manager.js   # Hire/terminate operations
-│   ├── compensation.manager.js # Salary/allowance operations
-│   └── payroll.manager.js      # Payroll processing
-│
-├── factories/                  # Clean object creation
-│   ├── employee.factory.js     # Employee creation with defaults
-│   ├── payroll.factory.js      # Payroll generation
-│   └── compensation.factory.js # Compensation breakdown
-│
-├── services/                   # High-level operations
-│   ├── employee.service.js     # Employee CRUD + queries
-│   ├── payroll.service.js      # Batch payroll processing
-│   └── compensation.service.js # Compensation calculations
-│
-└── utils/                      # Pure, reusable functions
-    ├── date.utils.js           # Date calculations
-    ├── calculation.utils.js    # Salary calculations
-    ├── validation.utils.js     # Validators
-    └── query-builders.js       # Fluent query API
+```bash
+npm install @classytic/payroll @classytic/clockin mongoose
 ```
 
-## 🚀 Quick Start
+## Quick Start (3 steps)
 
-### 1. Create Your Employee Model
+### 1. Create Models
 
-```javascript
-// modules/employee/employee.model.js
+```typescript
 import mongoose from 'mongoose';
-import { employmentFields, employeePlugin } from '#lib/hrm/index.js';
+import { createAttendanceSchema } from '@classytic/clockin/schemas';
+import { employeeSchema, employeePlugin, payrollRecordSchema, createHolidaySchema } from '@classytic/payroll';
 
-const employeeSchema = new mongoose.Schema({
-  // Core HRM fields (required)
-  ...employmentFields,
+// Attendance (from ClockIn - required for payroll)
+const Attendance = mongoose.model('Attendance', createAttendanceSchema());
 
-  // Your custom fields
-  certifications: [{ name: String, issuedDate: Date }],
-  specializations: [String],
-  emergencyContact: { name: String, phone: String },
-  // ... any other fields you need
-});
-
-// Apply HRM plugin (adds methods, virtuals, indexes)
+// Employee (with payroll plugin)
 employeeSchema.plugin(employeePlugin);
+const Employee = mongoose.model('Employee', employeeSchema);
 
-export default mongoose.model('Employee', employeeSchema);
+// PayrollRecord
+const PayrollRecord = mongoose.model('PayrollRecord', payrollRecordSchema);
+
+// Transaction (your own model)
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+// Holiday (optional - use our schema or your own)
+const Holiday = mongoose.model('Holiday', createHolidaySchema());
 ```
 
-### 2. Bootstrap Integration
+### 2. Initialize
 
-```javascript
-// bootstrap/hrm.js
-import { initializeHRM } from '#lib/hrm/index.js';
-import Employee from '../modules/employee/employee.model.js';
-import PayrollRecord from '#lib/hrm/models/payroll-record.model.js';
-import Transaction from '../modules/transaction/transaction.model.js';
-import Attendance from '#lib/attendance/models/attendance.model.js';
+```typescript
+import { createPayrollInstance } from '@classytic/payroll';
 
-export async function loadHRM() {
-  initializeHRM({
+const payroll = createPayrollInstance()
+  .withModels({
     EmployeeModel: Employee,
     PayrollRecordModel: PayrollRecord,
     TransactionModel: Transaction,
-    AttendanceModel: Attendance, // Optional
-  });
-}
+    AttendanceModel: Attendance,
+  })
+  .build();
 ```
 
-### 3. Use the HRM API
+### 3. Use It
 
-```javascript
-import { hrm } from '#lib/hrm/index.js';
-
+```typescript
 // Hire employee
-const employee = await hrm.hire({
-  organizationId,
-  userId,
+const employee = await payroll.hire({
+  userId: user._id,
+  organizationId: org._id,
   employment: {
-    employeeId: 'EMP-001',
+    position: 'Software Engineer',
+    department: 'it',
     type: 'full_time',
-    department: 'training',
-    position: 'Senior Trainer',
-    hireDate: new Date(),
   },
   compensation: {
-    baseAmount: 50000,
-    frequency: 'monthly',
+    baseAmount: 100000,
+    currency: 'USD',
     allowances: [
-      { type: 'housing', amount: 10000 },
-      { type: 'transport', amount: 5000 }
-    ]
+      { type: 'housing', amount: 20000, taxable: true },
+    ],
   },
-  bankDetails: {
-    accountName: 'John Doe',
-    accountNumber: '1234567890',
-    bankName: 'Example Bank'
-  },
-  context: { userId: hrManagerId }
 });
 
-// Process salary (creates Transaction automatically)
-const result = await hrm.processSalary({
+// Process monthly payroll (automatic attendance deductions)
+const result = await payroll.processSalary({
   employeeId: employee._id,
-  month: 11,
-  year: 2025,
-  paymentDate: new Date(),
-  paymentMethod: 'bank',
-  context: { userId: hrManagerId }
+  month: 3,
+  year: 2024,
 });
 
-// Bulk payroll (all active employees)
-const results = await hrm.processBulkPayroll({
-  organizationId,
-  month: 11,
-  year: 2025,
-  context: { userId: hrManagerId }
+console.log(result.payrollRecord.breakdown);
+// {
+//   baseSalary: 100000,
+//   allowances: 20000,
+//   deductions: 9090,  // ← Attendance deduction
+//   tax: 2500,
+//   gross: 120000,
+//   net: 108410
+// }
+```
+
+## Single-Tenant Setup
+
+Building a single-organization HRM? Configure once, forget `organizationId` everywhere else:
+
+```typescript
+// Configure with your organization ID once
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel, AttendanceModel })
+  .forSingleTenant({ organizationId: myOrg._id })  // ← Set once
+  .build();
+
+// No organizationId needed in operations - auto-injected!
+const employee = await payroll.hire({
+  userId: user._id,
+  employment: { position: 'Manager', department: 'hr', type: 'full_time' },
+  compensation: { baseAmount: 150000, currency: 'USD' },
 });
 ```
 
+## Attendance (ClockIn)
 
-## 🎨 Complete API Reference
+Attendance is **native**, not an add-on:
 
-### Employment Lifecycle
+```typescript
+import { ClockIn } from '@classytic/clockin';
+import { getAttendance } from '@classytic/payroll';
 
-```javascript
-// Hire
-await hrm.hire({ organizationId, userId, employment, compensation, bankDetails, context });
+// Initialize ClockIn
+const clockin = ClockIn.create()
+  .withModels({ Attendance, Membership: Employee })
+  .build();
 
-// Update employment details
-await hrm.updateEmployment({ employeeId, updates: { department: 'management' }, context });
-
-// Terminate
-await hrm.terminate({ employeeId, terminationDate, reason: 'resignation', notes, context });
-
-// Re-hire (same employee, new stint)
-await hrm.reHire({ employeeId, hireDate, position, compensation, context });
-
-// List employees
-await hrm.listEmployees({
-  organizationId,
-  filters: { status: 'active', department: 'training', minSalary: 40000 },
-  pagination: { page: 1, limit: 20 }
+// Employees check in
+await clockin.checkIn.record({
+  member: employee,
+  targetModel: 'Employee',
+  data: { method: 'qr_code' },
 });
 
-// Get single employee
-await hrm.getEmployee({ employeeId, populateUser: true });
-```
-
-### Compensation Management
-
-```javascript
-// Update salary
-await hrm.updateSalary({
-  employeeId,
-  compensation: { baseAmount: 60000 },
-  effectiveFrom: new Date(),
-  context
+// Payroll automatically uses attendance
+const attendance = await getAttendance(Attendance, {
+  organizationId: org._id,
+  employeeId: employee._id,
+  month: 3,
+  year: 2024,
+  expectedDays: 22,
 });
 
-// Add allowance
-await hrm.addAllowance({
-  employeeId,
-  type: 'meal',
-  amount: 3000,
-  taxable: true,
-  recurring: true,
-  context
-});
-
-// Remove allowance
-await hrm.removeAllowance({ employeeId, type: 'meal', context });
-
-// Add deduction
-await hrm.addDeduction({
-  employeeId,
-  type: 'loan',
-  amount: 5000,
-  auto: true, // Auto-deduct from salary
-  description: 'Personal loan repayment',
-  context
-});
-
-// Remove deduction
-await hrm.removeDeduction({ employeeId, type: 'loan', context });
-
-// Update bank details
-await hrm.updateBankDetails({
-  employeeId,
-  bankDetails: { accountNumber: '9876543210', bankName: 'New Bank' },
-  context
+await payroll.processSalary({
+  employeeId: employee._id,
+  month: 3,
+  year: 2024,
+  attendance, // ← Deductions automatically applied
 });
 ```
 
-### Payroll Processing
+## Holidays
 
-```javascript
-// Process single salary
-await hrm.processSalary({
+Simple approach - one way:
+
+```typescript
+import { getHolidays } from '@classytic/payroll';
+
+// Add sudden off day
+await Holiday.create({
+  organizationId: org._id,
+  date: new Date('2024-03-17'),
+  name: 'Emergency closure',
+  type: 'company',
+  paid: true,
+});
+
+// Get holidays when processing
+const holidays = await getHolidays(Holiday, {
+  organizationId: org._id,
+  startDate: new Date('2024-03-01'),
+  endDate: new Date('2024-03-31'),
+});
+
+// Pass to payroll
+await payroll.processSalary({
   employeeId,
-  month: 11,
-  year: 2025,
-  paymentDate: new Date(),
-  paymentMethod: 'bank',
-  context
-});
-
-// Bulk payroll
-await hrm.processBulkPayroll({
-  organizationId,
-  month: 11,
-  year: 2025,
-  employeeIds: [], // Empty = all active employees
-  paymentDate: new Date(),
-  paymentMethod: 'bank',
-  context
-});
-
-// Payroll history
-await hrm.payrollHistory({
-  employeeId,
-  organizationId,
-  month: 11,
-  year: 2025,
-  status: 'paid',
-  pagination: { page: 1, limit: 20 }
-});
-
-// Payroll summary
-await hrm.payrollSummary({
-  organizationId,
-  month: 11,
-  year: 2025
-});
-
-// Export payroll data (before auto-deletion)
-const records = await hrm.exportPayroll({
-  organizationId,
-  startDate: new Date('2023-01-01'),
-  endDate: new Date('2023-12-31'),
-  format: 'json'
+  month: 3,
+  year: 2024,
+  options: { holidays },
 });
 ```
 
-## 📊 Data Models
+## Logging
 
-### Employee (Your Model + HRM Fields)
+Control logging in production:
 
-```javascript
-{
-  // Identity & tenant
-  userId: ObjectId,              // Links to User
-  organizationId: ObjectId,      // Multi-tenant isolation
-  employeeId: "EMP-001",         // Custom ID (unique per org)
+```typescript
+import { disableLogging, enableLogging } from '@classytic/payroll/utils';
 
-  // Employment
-  employmentType: "full_time",   // full_time, part_time, contract, intern
-  status: "active",              // active, on_leave, suspended, terminated
-  department: "training",
-  position: "Senior Trainer",
-
-  // Dates
-  hireDate: Date,
-  terminationDate: Date,
-  probationEndDate: Date,
-
-  // Employment history (re-hiring support)
-  employmentHistory: [{
-    hireDate: Date,
-    terminationDate: Date,
-    reason: String,
-    finalSalary: Number
-  }],
-
-  // Compensation
-  compensation: {
-    baseAmount: 50000,
-    frequency: "monthly",
-    currency: "BDT",
-
-    allowances: [
-      { type: "housing", amount: 10000, taxable: true },
-      { type: "transport", amount: 5000, taxable: false }
-    ],
-
-    deductions: [
-      { type: "loan", amount: 2000, auto: true }
-    ],
-
-    grossSalary: 65000,    // Auto-calculated
-    netSalary: 63000,      // Auto-calculated
-  },
-
-  // Bank details
-  bankDetails: {
-    accountName: String,
-    accountNumber: String,
-    bankName: String
-  },
-
-  // Payroll stats (pre-calculated)
-  payrollStats: {
-    totalPaid: 500000,
-    lastPaymentDate: Date,
-    nextPaymentDate: Date,
-    paymentsThisYear: 10,
-    averageMonthly: 50000
-  },
-
-  // YOUR CUSTOM FIELDS
-  certifications: [...],
-  specializations: [...],
-  emergencyContact: {...}
+// Disable in production
+if (process.env.NODE_ENV === 'production') {
+  disableLogging();
 }
-```
 
-### PayrollRecord (Universal Ledger)
-
-```javascript
-{
-  organizationId: ObjectId,
-  employeeId: ObjectId,
-  userId: ObjectId,
-
-  period: {
-    month: 11,
-    year: 2025,
-    startDate: Date,
-    endDate: Date,
-    payDate: Date
+// Or use custom logger
+payroll.initialize({
+  ...models,
+  logger: {
+    info: (msg, meta) => pino.info(meta, msg),
+    error: (msg, meta) => pino.error(meta, msg),
+    warn: (msg, meta) => pino.warn(meta, msg),
+    debug: (msg, meta) => pino.debug(meta, msg),
   },
-
-  breakdown: {
-    baseAmount: 50000,
-    allowances: [...],
-    deductions: [...],
-    grossSalary: 65000,
-    netSalary: 63000,
-
-    // Smart calculations
-    workingDays: 30,
-    actualDays: 25,           // If joined mid-month
-    proRatedAmount: 41667,    // Pro-rated salary
-    attendanceDeduction: 0,   // From attendance integration
-    overtimeAmount: 0,
-    bonusAmount: 0
-  },
-
-  transactionId: ObjectId,    // Links to Transaction
-  status: "paid",
-  paidAt: Date,
-
-  // Export tracking
-  exported: false,            // Must export before TTL deletion
-  exportedAt: Date
-}
-```
-
-## ⚙️ Configuration
-
-```javascript
-// lib/hrm/config.js
-export const HRM_CONFIG = {
-  dataRetention: {
-    payrollRecordsTTL: 63072000,      // 2 years in seconds
-    exportWarningDays: 30,            // Warn before deletion
-    archiveBeforeDeletion: true,
-  },
-
-  payroll: {
-    defaultCurrency: 'BDT',
-    allowProRating: true,             // Mid-month hire calculations
-    attendanceIntegration: true,      // Unpaid leave deductions
-    autoDeductions: true,             // Auto-deduct loans/advances
-  },
-
-  employment: {
-    defaultProbationMonths: 3,
-    allowReHiring: true,              // Re-hire terminated employees
-    trackEmploymentHistory: true,
-  },
-
-  validation: {
-    requireBankDetails: false,
-    allowMultiTenantEmployees: true,  // Same user in multiple orgs
-  },
-};
-```
-
-## 🔑 Key Concepts
-
-### Multi-Tenant Architecture
-
-Same user can work at multiple gyms:
-```javascript
-// User "john@example.com" (userId: 123)
-// Works at Gym A
-{ userId: 123, organizationId: "gymA", employeeId: "EMP-001", status: "active" }
-
-// Also works at Gym B
-{ userId: 123, organizationId: "gymB", employeeId: "STAFF-05", status: "active" }
-```
-
-Indexes ensure uniqueness:
-- `{ userId: 1, organizationId: 1 }` unique
-- `{ organizationId: 1, employeeId: 1 }` unique
-
-### Re-Hiring Flow
-
-```javascript
-// Employee leaves
-await hrm.terminate({
-  employeeId,
-  reason: 'resignation',
-  terminationDate: new Date()
 });
-// status: 'terminated', data preserved
-
-// Employee comes back
-await hrm.reHire({
-  employeeId,
-  hireDate: new Date(),
-  position: 'Manager', // Optional: new position
-  compensation: { baseAmount: 60000 } // Optional: new salary
-});
-// status: 'active', previous stint added to employmentHistory[]
 ```
 
-### Smart Payroll Calculations
+## API
 
-**Pro-Rating (Mid-Month Hire)**:
-```javascript
-// Employee hired on Nov 15
-// Working days: 15 out of 30
-// Base salary: 60,000
-// Pro-rated: 60,000 × (15/30) = 30,000
+```typescript
+// Employee lifecycle
+payroll.hire({ ... })
+payroll.updateEmployment({ ... })
+payroll.terminate({ ... })
+payroll.reHire({ ... })
+
+// Compensation
+payroll.updateSalary({ ... })
+payroll.addAllowance({ ... })
+payroll.addDeduction({ ... })
+
+// Payroll processing
+payroll.processSalary({ ... })
+payroll.processBulkPayroll({ ... })
+payroll.payrollHistory({ ... })
+payroll.payrollSummary({ ... })
+
+// Pure functions (for previews/testing)
+import { calculateSalaryBreakdown, countWorkingDays, calculateTax } from '@classytic/payroll/core';
 ```
 
-**Attendance Integration**:
-```javascript
-// Monthly salary: 60,000
-// Working days: 30
-// Attended days: 25
-// Absent days: 5
-// Daily rate: 60,000 / 30 = 2,000
-// Deduction: 5 × 2,000 = 10,000
-// Final: 60,000 - 10,000 = 50,000
-```
+## Related Packages
 
-**Auto Deductions**:
-```javascript
-compensation: {
-  baseAmount: 60000,
-  allowances: [{ type: 'housing', amount: 10000 }],
-  deductions: [
-    { type: 'loan', amount: 5000, auto: true },  // Auto-deduct
-    { type: 'tax', amount: 3000, auto: true }
-  ],
-  grossSalary: 70000,
-  netSalary: 62000  // 70000 - 5000 - 3000
-}
-```
+- **[@classytic/clockin](https://npmjs.com/package/@classytic/clockin)** - Attendance management (required peer dependency)
 
-### Transaction Integration
+## License
 
-Every salary payment creates a Transaction:
-```javascript
-{
-  organizationId,
-  type: 'expense',
-  category: 'salary',
-  amount: 63000,
-  method: 'bank',
-  status: 'completed',
-  referenceId: employeeId,
-  referenceModel: 'Employee',
-  metadata: {
-    employeeId: 'EMP-001',
-    payrollRecordId: ObjectId(...),
-    period: { month: 11, year: 2025 },
-    breakdown: { ... }
-  }
-}
-```
-
-### Data Retention & Export
-
-PayrollRecords auto-delete after 2 years:
-```javascript
-// TTL index on PayrollRecord
-payrollRecordSchema.index(
-  { createdAt: 1 },
-  {
-    expireAfterSeconds: 63072000,  // 2 years
-    partialFilterExpression: { exported: true }  // Only if exported
-  }
-);
-
-// Export before deletion
-const records = await hrm.exportPayroll({
-  organizationId,
-  startDate: new Date('2023-01-01'),
-  endDate: new Date('2023-12-31')
-});
-// Marks records as exported, making them eligible for deletion
-```
-
-## 🎯 Design Philosophy
-
-- **Stripe/Passport.js inspired**: Clean DSL, dependency injection, reusable components
-- **Lightweight**: Not a complex ERP, gym-focused features only
-- **Multi-tenant**: Same user can work at multiple organizations
-- **Smart defaults**: Pro-rating, attendance integration, automatic calculations
-- **Production-ready**: Transaction integration, data retention, comprehensive error handling
-
-## ✅ Next Steps
-
-1. Test bootstrap initialization
-2. Create Fastify routes in `modules/employee/`
-3. Add API handlers
-4. Migrate existing staff from organization module
-5. Deploy and monitor
-
----
-
-**Built with ❤️ following world-class architecture patterns**
-**Ready for multi-tenant gym management**
+MIT © [Sadman Chowdhury](https://github.com/classytic)

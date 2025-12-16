@@ -4,263 +4,286 @@ This guide explains how to develop and test the `@classytic/payroll` library loc
 
 ---
 
-## Method 1: Test Locally (Fastest)
+## Prerequisites
 
-Run examples directly in the library without installing anywhere:
-
-```bash
-# In the payroll directory
-cd d:\projects\packages\payroll
-
-# Run basic example
-npm run example:basic
-
-# Run mongoose example
-npm run example:mongoose
-
-# Or run directly
-node test/examples/basic-usage.js
-```
-
-**When to use:** Quick tests while developing, no external project needed.
+- Node.js 18+
+- npm or pnpm
+- TypeScript 5+
 
 ---
 
-## Method 2: npm link (Recommended for Development)
-
-Link the library to your project so changes reflect immediately without reinstalling.
-
-### Step 1: Link the Library
+## Setup
 
 ```bash
-# In the payroll library directory
+# Clone and install
 cd d:\projects\packages\payroll
-npm link
-```
+npm install
 
-You should see:
-```
-added 1 package, and audited 1 package
-found 0 vulnerabilities
-```
+# Build the library
+npm run build
 
-### Step 2: Link to Your Project
-
-```bash
-# In your project directory (e.g., fitverse-be)
-cd d:\path\to\your-project-be
-npm link @classytic/payroll
-```
-
-You should see:
-```
-node_modules/@classytic/payroll -> ../../packages/payroll
-```
-
-### Step 3: Use in Your Project
-
-```javascript
-// In fitverse-be/src/app.js
-import { paymentService } from '@classytic/payroll';
-
-console.log('Payroll library loaded!', paymentService);
-```
-
-### Step 4: Make Changes & Test
-
-```bash
-# 1. Edit code in payroll library
-# d:\projects\packages\payroll\src\index.js
-
-# 2. Changes are IMMEDIATELY available in fitverse-be
-# No need to reinstall!
-
-# 3. Test in your project
-cd d:\path\to\fitverse-be
-npm start
-```
-
-### Unlink When Done
-
-```bash
-# In your project
-cd d:\path\to\fitverse-be
-npm unlink @classytic/payroll
-
-# Reinstall from npm (after publishing)
-npm install @classytic/payroll
-
-# In the library (optional cleanup)
-cd d:\projects\packages\payroll
-npm unlink
-```
-
----
-
-## Method 3: Local Path Install
-
-Install directly from the file system (requires reinstall after each change):
-
-```bash
-# In your project
-cd d:\path\to\fitverse-be
-
-# Install from local path
-npm install d:\projects\packages\payroll
-
-# Or relative path
-npm install ../payroll
-```
-
-**After making changes:**
-```bash
-# Reinstall to see changes
-npm install d:\projects\packages\payroll --force
-```
-
-**When to use:** Testing before publishing, or when npm link doesn't work.
-
----
-
-## Comparison
-
-| Method | Speed | Auto-Update | Best For |
-|--------|-------|-------------|----------|
-| **Local Test** | ⚡ Fastest | N/A | Quick library development |
-| **npm link** | ⚡ Fast | ✅ Yes | Active development in both projects |
-| **Local Install** | 🐌 Slow | ❌ No (manual reinstall) | Pre-publish testing |
-
----
-
-## Common Issues & Solutions
-
-### Issue: "Cannot find module '@classytic/payroll'"
-
-**Solution:** Make sure you linked properly:
-```bash
-# Re-link the library
-cd d:\projects\packages\payroll
-npm link
-
-# Re-link in project
-cd d:\path\to\fitverse-be
-npm link @classytic/payroll
-```
-
-### Issue: Changes not reflecting
-
-**Solution 1:** Check if link is active:
-```bash
-# In your project
-ls -la node_modules/@classytic/payroll
-# Should show a symlink (->)
-```
-
-**Solution 2:** Restart your dev server:
-```bash
-# Stop and restart
-npm start
-```
-
-### Issue: "Module not found" errors in linked package
-
-**Solution:** Install dependencies in the library:
-```bash
-cd d:\projects\packages\payroll
-npm install mongoose
-```
-
-### Issue: Want to use published version again
-
-**Solution:** Unlink and reinstall:
-```bash
-cd d:\path\to\fitverse-be
-npm unlink @classytic/payroll
-npm install @classytic/payroll
+# Run tests
+npm test
 ```
 
 ---
 
 ## Development Workflow
 
-### Daily Development:
+### 1. Make Changes
+
+Edit TypeScript files in `src/`:
+
+```
+src/
+├── index.ts          # Main exports
+├── payroll.ts        # Main Payroll class
+├── types.ts          # Type definitions
+├── enums.ts          # Enum constants
+├── config.ts         # Configuration
+├── core/             # Core modules (events, plugins, container)
+├── schemas/          # Mongoose schemas
+├── factories/        # Data factories
+├── services/         # Service layer
+├── utils/            # Utility functions
+├── errors/           # Error classes
+├── plugins/          # Mongoose plugins
+└── models/           # Model definitions
+```
+
+### 2. Type Check
 
 ```bash
-# 1. Make changes in payroll library
+# Check for TypeScript errors
+npx tsc --noEmit
+```
+
+### 3. Build
+
+```bash
+# Build the library
+npm run build
+```
+
+Output goes to `dist/`:
+- ESM modules (`.js`)
+- TypeScript declarations (`.d.ts`)
+- Source maps (`.js.map`)
+
+### 4. Test
+
+```bash
+# Run all tests
+npm test
+
+# Run specific test file
+npm test -- tests/core.test.ts
+
+# Run with coverage
+npm test -- --coverage
+```
+
+---
+
+## Using npm link (Recommended)
+
+Link the library to your project for live development.
+
+### Step 1: Link the Library
+
+```bash
 cd d:\projects\packages\payroll
-# Edit src/service.js
-
-# 2. Test locally (optional)
-npm run example:basic
-
-# 3. Test in linked project (automatic)
-cd d:\path\to\fitverse-be
-npm start
-# Changes are already there!
-
-# 4. Commit when ready
-git add .
-git commit -m "Add new feature"
+npm link
 ```
 
-### Before Publishing:
+### Step 2: Link to Your Project
 
 ```bash
-# 1. Test examples
-npm run example:basic
-npm run example:mongoose
-
-# 2. Update version
-npm version patch
-
-# 3. Push to GitHub
-git push && git push --tags
-
-# 4. Publish to npm
-npm publish --access public
-
-# 5. Update in projects
-cd d:\path\to\fitverse-be
-npm unlink @classytic/payroll  # Remove link
-npm install @classytic/payroll@latest  # Use published version
+cd d:\path\to\your-project
+npm link @classytic/payroll
 ```
 
----
-
-## Quick Reference
+### Step 3: Rebuild on Changes
 
 ```bash
-# Link library (one-time setup)
-cd payroll && npm link
+# In payroll directory - rebuild after changes
+npm run build
+```
 
-# Use in project
-cd fitverse-be && npm link @classytic/payroll
+### Step 4: Unlink When Done
 
-# Make changes (automatic update)
-# Just edit files in payroll/src/*
+```bash
+# In your project
+npm unlink @classytic/payroll
+npm install @classytic/payroll
 
-# Unlink when done
-cd fitverse-be && npm unlink @classytic/payroll
-cd payroll && npm unlink
-
-# Test library directly
-npm run example:basic
+# In payroll directory
+npm unlink
 ```
 
 ---
 
-## Tips
+## Testing in Your Project
 
-1. **Always use npm link** for active development
-2. **Run local tests** before publishing
-3. **Unlink before publishing** to test the real package
-4. **Keep dependencies updated** in both library and projects
-5. **Restart dev server** if changes don't reflect
+```typescript
+import { createPayrollInstance } from '@classytic/payroll';
+
+// Create and initialize
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+  })
+  .build();
+
+// Test operations
+await payroll.hire({
+  userId,
+  organizationId,
+  employment: { position: 'Test', department: 'Engineering' },
+  compensation: { baseAmount: 50000 },
+});
+```
 
 ---
 
-## Need Help?
+## Project Structure
 
-- Check [NPM_GUIDE.md](./NPM_GUIDE.md) for publishing workflow
-- Check [test/README.md](./test/README.md) for available examples
-- Run `npm run example:basic` to verify library is working
+```
+@classytic/payroll/
+├── src/                    # TypeScript source
+│   ├── index.ts           # Main exports
+│   ├── payroll.ts         # Payroll class
+│   ├── types.ts           # Type definitions
+│   ├── enums.ts           # Constants
+│   ├── config.ts          # Configuration
+│   ├── core/              # Core modules
+│   │   ├── container.ts   # DI container
+│   │   ├── events.ts      # Event bus
+│   │   ├── plugin.ts      # Plugin system
+│   │   └── result.ts      # Result type
+│   ├── schemas/           # Mongoose schemas
+│   ├── factories/         # Data factories
+│   ├── services/          # Service layer
+│   ├── utils/             # Utilities
+│   ├── errors/            # Error classes
+│   ├── plugins/           # Mongoose plugins
+│   └── models/            # Model definitions
+├── dist/                   # Built output (ESM + types)
+├── tests/                  # Test files
+├── docs/                   # Documentation
+├── tsconfig.json          # TypeScript config
+├── tsup.config.ts         # Build config
+├── vitest.config.ts       # Test config
+└── package.json
+```
+
+---
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run build` | Build with tsup |
+| `npm test` | Run tests with vitest |
+| `npm run typecheck` | Type check without emit |
+| `npm run lint` | Lint source files |
+
+---
+
+## Adding New Features
+
+### 1. Add Types (if needed)
+
+```typescript
+// src/types.ts
+export interface NewFeatureParams {
+  // ...
+}
+```
+
+### 2. Implement Feature
+
+```typescript
+// src/payroll.ts or appropriate file
+async newFeature(params: NewFeatureParams): Promise<Result> {
+  // Implementation
+}
+```
+
+### 3. Export from Index
+
+```typescript
+// src/index.ts
+export type { NewFeatureParams } from './types.js';
+```
+
+### 4. Add Tests
+
+```typescript
+// tests/new-feature.test.ts
+describe('New Feature', () => {
+  it('should work correctly', () => {
+    // Test
+  });
+});
+```
+
+### 5. Update Documentation
+
+Add usage examples to README.md.
+
+---
+
+## Common Issues
+
+### "Cannot find module" Error
+
+```bash
+# Rebuild the library
+npm run build
+
+# Re-link if using npm link
+npm link @classytic/payroll
+```
+
+### Type Errors
+
+```bash
+# Check for errors
+npx tsc --noEmit
+
+# Clean and rebuild
+rm -rf dist
+npm run build
+```
+
+### Tests Failing
+
+```bash
+# Run with verbose output
+npm test -- --reporter=verbose
+
+# Run single test
+npm test -- tests/core.test.ts
+```
+
+---
+
+## Pre-Publish Checklist
+
+1. [ ] All tests passing (`npm test`)
+2. [ ] TypeScript compiles (`npx tsc --noEmit`)
+3. [ ] Build succeeds (`npm run build`)
+4. [ ] README.md updated
+5. [ ] Version bumped (`npm version patch|minor|major`)
+6. [ ] Git committed and tagged
+
+---
+
+## Related Docs
+
+- [README.md](../README.md) - Main documentation
+- [NPM_GUIDE.md](../NPM_GUIDE.md) - Publishing workflow
+- [INTEGRATION.md](./INTEGRATION.md) - Attendance integration

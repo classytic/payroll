@@ -2,65 +2,69 @@
 
 ## Publishing Workflow
 
-### 1. Make Changes in Payroll Repo
+### 1. Make Changes
+
 ```bash
-# Make your code changes
-# Test thoroughly
-npm test  # If you have tests
+cd d:\projects\packages\payroll
+
+# Edit TypeScript source in src/
+# Run type check
+npx tsc --noEmit
+
+# Run tests
+npm test
+
+# Build
+npm run build
 ```
 
 ### 2. Update Version
+
 Choose the appropriate version bump:
 
 ```bash
-# For bug fixes (1.0.0 → 1.0.1)
+# For bug fixes (2.0.0 → 2.0.1)
 npm version patch
 
-# For new features (1.0.0 → 1.1.0)
+# For new features (2.0.0 → 2.1.0)
 npm version minor
 
-# For breaking changes (1.0.0 → 2.0.0)
+# For breaking changes (2.0.0 → 3.0.0)
 npm version major
 ```
 
 **Note:** `npm version` automatically creates a git commit and tag.
 
 ### 3. Push to GitHub
+
 ```bash
-# Push code and tags
 git push && git push --tags
 ```
 
 ### 4. Publish to NPM
 
 #### First-time setup:
-```bash
-# Login to npm (one-time)
-npm login
 
-# Verify you're logged in
-npm whoami
+```bash
+npm login
+npm whoami  # Verify login
 ```
 
 #### Publish:
+
 ```bash
-# For scoped packages (@classytic/payroll)
 npm publish --access public
 
-# Verify package is published
+# Verify
 npm view @classytic/payroll
 ```
 
-### 5. Update in Your Projects (e.g., fitverse-be)
+### 5. Update in Your Projects
+
 ```bash
-# In your project directory
 npm update @classytic/payroll
-
-# Or install specific version
+# or
 npm install @classytic/payroll@latest
-
-# Or with version number
-npm install @classytic/payroll@1.2.3
 ```
 
 ---
@@ -68,14 +72,17 @@ npm install @classytic/payroll@1.2.3
 ## Quick Reference
 
 ```bash
-# Development workflow
-npm version patch          # Bug fixes
-npm version minor          # New features
-npm version major          # Breaking changes
+# Development
+npm run build              # Build library
+npm test                   # Run tests
+npx tsc --noEmit          # Type check
+
+# Publish
+npm version patch|minor|major
 git push && git push --tags
 npm publish --access public
 
-# In consuming projects
+# Update in projects
 npm update @classytic/payroll
 ```
 
@@ -83,11 +90,11 @@ npm update @classytic/payroll
 
 ## Pre-publish Checklist
 
-- [ ] All tests passing
+- [ ] TypeScript compiles (`npx tsc --noEmit`)
+- [ ] All tests passing (`npm test`)
+- [ ] Build succeeds (`npm run build`)
 - [ ] README.md updated
-- [ ] CHANGELOG updated (if you maintain one)
 - [ ] No sensitive data in code
-- [ ] `.gitignore` properly configured
 - [ ] Version bumped appropriately
 - [ ] Git committed and tagged
 
@@ -97,32 +104,93 @@ npm update @classytic/payroll
 
 **MAJOR.MINOR.PATCH** (e.g., 2.3.1)
 
-- **PATCH** (1.0.0 → 1.0.1): Bug fixes, no API changes
-- **MINOR** (1.0.0 → 1.1.0): New features, backward compatible
-- **MAJOR** (1.0.0 → 2.0.0): Breaking changes, not backward compatible
+- **PATCH** (2.0.0 → 2.0.1): Bug fixes, no API changes
+- **MINOR** (2.0.0 → 2.1.0): New features, backward compatible
+- **MAJOR** (2.0.0 → 3.0.0): Breaking changes, not backward compatible
+
+---
+
+## Package Structure
+
+```
+@classytic/payroll/
+├── src/                    # TypeScript source
+│   ├── index.ts           # Main exports
+│   ├── payroll.ts         # Payroll class
+│   ├── types.ts           # Type definitions
+│   ├── enums.ts           # Constants
+│   ├── config.ts          # Configuration
+│   ├── core/              # Core modules
+│   ├── schemas/           # Mongoose schemas
+│   ├── factories/         # Data factories
+│   ├── services/          # Service layer
+│   ├── utils/             # Utilities
+│   ├── errors/            # Error classes
+│   ├── plugins/           # Mongoose plugins
+│   └── models/            # Model definitions
+├── dist/                   # Built output
+│   ├── index.js           # ESM module
+│   ├── index.d.ts         # Type declarations
+│   └── ...
+├── tests/                  # Test files
+├── docs/                   # Documentation
+├── package.json
+├── tsconfig.json
+├── tsup.config.ts
+└── vitest.config.ts
+```
+
+---
+
+## Usage Example
+
+```typescript
+import { createPayrollInstance } from '@classytic/payroll';
+
+// Initialize
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+  })
+  .withConfig({
+    payroll: { defaultCurrency: 'USD' },
+  })
+  .build();
+
+// Use
+await payroll.hire({
+  userId,
+  organizationId,
+  employment: { position: 'Engineer', department: 'Engineering' },
+  compensation: { baseAmount: 80000 },
+});
+```
 
 ---
 
 ## Troubleshooting
 
 ### Package already published with this version
+
 ```bash
-# You forgot to bump version
 npm version patch
 npm publish --access public
 ```
 
 ### Permission denied
+
 ```bash
-# Make sure you're logged in
 npm whoami
 npm login
 ```
 
 ### Package not found after publish
+
+Wait 2-3 minutes for npm registry sync, then:
+
 ```bash
-# Wait 2-3 minutes for npm registry sync
-# Or check package page
 npm view @classytic/payroll
 ```
 
@@ -135,43 +203,6 @@ npm view @classytic/payroll
 3. Commit your changes: `git commit -m 'Add amazing feature'`
 4. Push to branch: `git push origin feature/amazing-feature`
 5. Open a Pull Request
-
----
-
-## Package Structure
-
-```
-@classytic/payroll/
-├── src/
-│   ├── index.js          # Main entry point
-│   ├── init.js           # Initialization
-│   ├── service.js        # Core service
-│   ├── adapters/         # Payment/integration adapters
-│   ├── events/           # Event handlers
-│   ├── workflows/        # Business workflows
-│   └── schemas/          # Database schemas
-├── package.json
-├── README.md
-├── LICENSE
-└── .gitignore
-```
-
----
-
-## Usage Example
-
-```javascript
-import { initializeHRM } from '@classytic/payroll';
-
-// Initialize the HRM system
-const hrm = initializeHRM({
-  mongooseConnection: mongoose.connection,
-  // ... other config
-});
-
-// Use exported services
-import { paymentService } from '@classytic/payroll/service';
-```
 
 ---
 
