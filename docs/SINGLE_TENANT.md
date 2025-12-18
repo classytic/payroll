@@ -7,18 +7,19 @@ For single-organization HRM, no `organizationId` needed anywhere.
 ```typescript
 import mongoose from 'mongoose';
 import { ClockIn, createAttendanceSchema } from '@classytic/clockin';
-import { createPayrollInstance, employeeSchema, employeePlugin, payrollRecordSchema } from '@classytic/payroll';
+import { createPayrollInstance, createEmployeeSchema, createPayrollRecordSchema, employeePlugin } from '@classytic/payroll';
 
 // Models
 const Attendance = model('Attendance', createAttendanceSchema());
+const employeeSchema = createEmployeeSchema();
 employeeSchema.plugin(employeePlugin);
 const Employee = model('Employee', employeeSchema);
-const PayrollRecord = model('PayrollRecord', payrollRecordSchema);
+const PayrollRecord = model('PayrollRecord', createPayrollRecordSchema());
 const Transaction = model('Transaction', transactionSchema);
 
 // Initialize both in single-tenant mode
-const clockin = ClockIn.create()
-  .withModels({ Attendance, Membership: Employee })
+const clockin = await ClockIn.create()
+  .withModels({ Attendance, Employee })
   .forSingleTenant()  // ← No organizationId needed
   .build();
 

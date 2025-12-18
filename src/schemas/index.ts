@@ -208,26 +208,26 @@ export const payrollBreakdownSchema = new Schema(
     baseAmount: { type: Number, required: true, min: 0 },
     allowances: [
       {
-        type: { type: String },
-        amount: { type: Number, min: 0 },
+        type: { type: String, required: true },
+        amount: { type: Number, required: true, min: 0 },
         taxable: { type: Boolean, default: true },
       },
     ],
     deductions: [
       {
-        type: { type: String },
-        amount: { type: Number, min: 0 },
+        type: { type: String, required: true },
+        amount: { type: Number, required: true, min: 0 },
         description: { type: String },
       },
     ],
     grossSalary: { type: Number, required: true, min: 0 },
     netSalary: { type: Number, required: true, min: 0 },
+    taxableAmount: { type: Number, default: 0, min: 0 },
+    taxAmount: { type: Number, default: 0, min: 0 },
     workingDays: { type: Number, min: 0 },
     actualDays: { type: Number, min: 0 },
     proRatedAmount: { type: Number, default: 0, min: 0 },
     attendanceDeduction: { type: Number, default: 0, min: 0 },
-    overtimeAmount: { type: Number, default: 0, min: 0 },
-    bonusAmount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -265,6 +265,7 @@ export const payrollRecordFields: SchemaDefinition = {
     type: Schema.Types.ObjectId,
     ref: 'User',
     index: true,
+    required: true,
   },
   period: { type: periodSchema, required: true },
   breakdown: { type: payrollBreakdownSchema, required: true },

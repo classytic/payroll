@@ -13,37 +13,58 @@ import type { ErrorCode, HttpError } from '../types.js';
 export class PayrollError extends Error implements HttpError {
   readonly code: ErrorCode;
   readonly status: number;
-  readonly context?: Record<string, unknown>;
+  readonly context: Record<string, unknown>;
   readonly timestamp: Date;
 
+  /**
+   * Create a PayrollError.
+   *
+   * Supports BOTH constructor styles for backwards compatibility:
+   * - new PayrollError(message, code?, status?, context?)
+   * - new PayrollError(code, status, message, context?)
+   */
   constructor(
-    message: string,
-    code: ErrorCode = 'PAYROLL_ERROR',
-    status = 500,
-    context?: Record<string, unknown>
+    messageOrCode: string | ErrorCode,
+    codeOrStatus: ErrorCode | number = 'PAYROLL_ERROR',
+    statusOrMessage: number | string = 500,
+    context: Record<string, unknown> = {}
   ) {
+    const isLegacySignature = typeof messageOrCode === 'string' && typeof codeOrStatus === 'string';
+
+    const message = isLegacySignature ? (messageOrCode as string) : (statusOrMessage as string);
     super(message);
-    this.name = 'PayrollError';
-    this.code = code;
-    this.status = status;
-    this.context = context;
+
+    this.name = this.constructor.name;
+    this.code = isLegacySignature ? (codeOrStatus as ErrorCode) : (messageOrCode as ErrorCode);
+    this.status = isLegacySignature ? (statusOrMessage as number) : (codeOrStatus as number);
+    this.context = context ?? {};
     this.timestamp = new Date();
 
     // Maintains proper stack trace for where error was thrown
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, PayrollError);
-    }
+    Error.captureStackTrace?.(this, this.constructor);
   }
 
+  /**
+   * Convert error to JSON for API responses (ClockIn-compatible shape)
+   */
   toJSON(): Record<string, unknown> {
     return {
-      name: this.name,
-      code: this.code,
-      message: this.message,
-      status: this.status,
-      context: this.context,
-      timestamp: this.timestamp.toISOString(),
+      error: {
+        type: this.name,
+        code: this.code,
+        message: this.message,
+        status: this.status,
+        context: this.context,
+        timestamp: this.timestamp.toISOString(),
+      },
     };
+  }
+
+  /**
+   * Check if error is operational (expected) vs programmer error
+   */
+  isOperational(): boolean {
+    return true;
   }
 }
 
@@ -57,7 +78,6 @@ export class PayrollError extends Error implements HttpError {
 export class NotInitializedError extends PayrollError {
   constructor(message = 'Payroll not initialized. Call Payroll.initialize() first.') {
     super(message, 'NOT_INITIALIZED', 500);
-    this.name = 'NotInitializedError';
   }
 }
 
@@ -70,9 +90,8 @@ export class EmployeeNotFoundError extends PayrollError {
       employeeId ? `Employee not found: ${employeeId}` : 'Employee not found',
       'EMPLOYEE_NOT_FOUND',
       404,
-      context
+      context ?? {}
     );
-    this.name = 'EmployeeNotFoundError';
   }
 }
 
@@ -81,8 +100,7 @@ export class EmployeeNotFoundError extends PayrollError {
  */
 export class InvalidEmployeeError extends PayrollError {
   constructor(message: string, context?: Record<string, unknown>) {
-    super(message, 'INVALID_EMPLOYEE', 400, context);
-    this.name = 'InvalidEmployeeError';
+    super(message, 'INVALID_EMPLOYEE', 400, context ?? {});
   }
 }
 
@@ -102,7 +120,6 @@ export class DuplicatePayrollError extends PayrollError {
       409,
       { employeeId, month, year, ...context }
     );
-    this.name = 'DuplicatePayrollError';
   }
 }
 
@@ -114,8 +131,7 @@ export class ValidationError extends PayrollError {
 
   constructor(errors: string | string[], context?: Record<string, unknown>) {
     const errorArray = Array.isArray(errors) ? errors : [errors];
-    super(errorArray.join(', '), 'VALIDATION_ERROR', 400, context);
-    this.name = 'ValidationError';
+    super(errorArray.join(', '), 'VALIDATION_ERROR', 400, context ?? {});
     this.errors = errorArray;
   }
 }
@@ -131,9 +147,8 @@ export class EmployeeTerminatedError extends PayrollError {
         : 'Cannot perform operation on terminated employee',
       'EMPLOYEE_TERMINATED',
       400,
-      context
+      context ?? {}
     );
-    this.name = 'EmployeeTerminatedError';
   }
 }
 
@@ -142,8 +157,7 @@ export class EmployeeTerminatedError extends PayrollError {
  */
 export class AlreadyProcessedError extends PayrollError {
   constructor(message: string, context?: Record<string, unknown>) {
-    super(message, 'ALREADY_PROCESSED', 409, context);
-    this.name = 'AlreadyProcessedError';
+    super(message, 'ALREADY_PROCESSED', 409, context ?? {});
   }
 }
 
@@ -152,8 +166,7 @@ export class AlreadyProcessedError extends PayrollError {
  */
 export class NotEligibleError extends PayrollError {
   constructor(message: string, context?: Record<string, unknown>) {
-    super(message, 'NOT_ELIGIBLE', 400, context);
-    this.name = 'NotEligibleError';
+    super(message, 'NOT_ELIGIBLE', 400, context ?? {});
   }
 }
 
@@ -181,7 +194,7 @@ export function createError(
     NOT_ELIGIBLE: 400,
   };
 
-  return new PayrollError(message, code, statusMap[code] || 500, context);
+  return new PayrollError(message, code, statusMap[code] || 500, context ?? {});
 }
 
 // ============================================================================
@@ -206,25 +219,33 @@ export function isErrorCode(error: unknown, code: ErrorCode): boolean {
  * Extract error info for logging
  */
 export function extractErrorInfo(error: unknown): {
+  code: string;
+  status: number;
   message: string;
-  code?: ErrorCode;
-  status?: number;
   context?: Record<string, unknown>;
 } {
   if (isPayrollError(error)) {
     return {
-      message: error.message,
       code: error.code,
       status: error.status,
+      message: error.message,
       context: error.context,
     };
   }
 
   if (error instanceof Error) {
-    return { message: error.message };
+    return {
+      code: 'PAYROLL_ERROR',
+      status: 500,
+      message: error.message,
+    };
   }
 
-  return { message: String(error) };
+  return {
+    code: 'PAYROLL_ERROR',
+    status: 500,
+    message: String(error),
+  };
 }
 
 // ============================================================================

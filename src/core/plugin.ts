@@ -5,7 +5,7 @@
  * Follows patterns from popular libraries like Mongoose, Fastify
  */
 
-import type { PayrollInstance, PayrollPlugin, Logger } from '../types.js';
+import type { PayrollInstance } from '../types.js';
 import type { EventBus, PayrollEventType, PayrollEventMap } from './events.js';
 
 // ============================================================================
@@ -57,7 +57,7 @@ export interface PluginHooks {
 }
 
 // ============================================================================
-// ClockIn Plugin Interface
+// Payroll Plugin Interface
 // ============================================================================
 
 export interface PayrollPluginDefinition {

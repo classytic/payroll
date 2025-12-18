@@ -2,11 +2,12 @@
  * @classytic/payroll - Attendance Integration
  *
  * Native integration with @classytic/clockin.
- * ClockIn is a peer dependency - attendance is core to payroll.
+ * ClockIn is an optional peer dependency for attendance-based deductions.
  */
 
 import type { Model } from 'mongoose';
 import type { AttendanceInput } from './core/config.js';
+import type { ObjectIdLike } from './types.js';
 
 /**
  * ClockIn attendance shape (from @classytic/clockin)
@@ -18,8 +19,8 @@ import type { AttendanceInput } from './core/config.js';
  * - paidLeaveDaysCount: Paid leave
  */
 interface ClockInAttendance {
-  tenantId: any;
-  targetId: any;
+  tenantId: unknown;
+  targetId: unknown;
   targetModel: string;
   year: number;
   month: number;
@@ -51,10 +52,10 @@ interface ClockInAttendance {
  * ```
  */
 export async function getAttendance(
-  AttendanceModel: Model<any>,
+  AttendanceModel: Model<unknown>,
   params: {
-    organizationId: any;
-    employeeId: any;
+    organizationId: ObjectIdLike;
+    employeeId: ObjectIdLike;
     month: number;
     year: number;
     expectedDays: number;
@@ -74,7 +75,7 @@ export async function getAttendance(
   const fullDays = record.fullDaysCount || 0;
   const halfDays = (record.halfDaysCount || 0) * 0.5;
   const paidLeave = record.paidLeaveDaysCount || 0;
-  const actualDays = Math.round(fullDays + halfDays + paidLeave);
+  const actualDays = fullDays + halfDays + paidLeave;
   const absentDays = Math.max(0, params.expectedDays - actualDays);
   const overtimeDays = record.overtimeDaysCount || 0;
 
@@ -103,10 +104,10 @@ export async function getAttendance(
  * ```
  */
 export async function batchGetAttendance(
-  AttendanceModel: Model<any>,
+  AttendanceModel: Model<unknown>,
   params: {
-    organizationId: any;
-    employeeIds: any[];
+    organizationId: ObjectIdLike;
+    employeeIds: ObjectIdLike[];
     month: number;
     year: number;
     expectedDays: number;
@@ -126,9 +127,9 @@ export async function batchGetAttendance(
     const fullDays = record.fullDaysCount || 0;
     const halfDays = (record.halfDaysCount || 0) * 0.5;
     const paidLeave = record.paidLeaveDaysCount || 0;
-    const actualDays = Math.round(fullDays + halfDays + paidLeave);
+    const actualDays = fullDays + halfDays + paidLeave;
 
-    map.set(record.targetId.toString(), {
+    map.set(String(record.targetId), {
       expectedDays: params.expectedDays,
       actualDays,
     });

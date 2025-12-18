@@ -14,6 +14,7 @@ import type {
   ObjectIdLike,
   EmployeeDocument,
   PayrollRecordDocument,
+  AnyDocument,
   HireEmployeeParams,
   UpdateEmploymentParams,
   TerminateEmployeeParams,
@@ -33,23 +34,22 @@ import type {
   ProcessSalaryResult,
   BulkPayrollResult,
   PayrollSummaryResult,
-  OperationContext,
   DeepPartial,
   Allowance,
   Deduction,
-  TaxBracket,
 } from './types.js';
-import { Container, type ModelsContainer, initializeContainer } from './core/container.js';
+import { Container, type ModelsContainer, resetDefaultContainer } from './core/container.js';
 import { EventBus, createEventBus, type PayrollEventMap } from './core/events.js';
 import { PluginManager, type PayrollPluginDefinition, type PluginContext } from './core/plugin.js';
 import { EmployeeFactory } from './factories/employee.factory.js';
-import { HRM_CONFIG, mergeConfig, TAX_BRACKETS } from './config.js';
+import { TAX_BRACKETS } from './config.js';
 import { HRM_TRANSACTION_CATEGORIES } from './enums.js';
 import { employee as employeeQuery, payroll as payrollQuery, toObjectId } from './utils/query-builders.js';
-import { getPayPeriod, diffInDays, addMonths, getWorkingDaysInMonth } from './utils/date.js';
+import { getPayPeriod, addMonths } from './utils/date.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions, applyTaxBrackets } from './utils/calculation.js';
-import { logger as defaultLogger, getLogger, setLogger } from './utils/logger.js';
+import { getLogger, setLogger } from './utils/logger.js';
 import { NotInitializedError, EmployeeNotFoundError, DuplicatePayrollError, NotEligibleError, EmployeeTerminatedError, ValidationError } from './errors/index.js';
+import { countWorkingDays, type AttendanceInput, type PayrollProcessingOptions } from './core/config.js';
 
 // ============================================================================
 // Helper: Check plugin methods exist
@@ -88,14 +88,49 @@ function isEffectiveForPeriod(
 // Payroll Class
 // ============================================================================
 
-export class Payroll {
-  private _container: Container;
+/**
+ * Fully generic Payroll class for best-in-class TypeScript DX.
+ *
+ * Type parameters flow through to all methods, providing complete type inference.
+ *
+ * @typeParam TEmployee - Your Employee document type (extends EmployeeDocument)
+ * @typeParam TPayrollRecord - Your PayrollRecord document type (extends PayrollRecordDocument)
+ * @typeParam TTransaction - Your Transaction document type
+ * @typeParam TAttendance - Your Attendance document type (optional)
+ *
+ * @example
+ * ```typescript
+ * // Full type inference
+ * const payroll = createPayrollInstance()
+ *   .withModels({
+ *     EmployeeModel,      // Model<MyEmployeeDoc>
+ *     PayrollRecordModel, // Model<MyPayrollDoc>
+ *     TransactionModel,   // Model<MyTransactionDoc>
+ *   })
+ *   .build();
+ *
+ * // employee is typed as MyEmployeeDoc
+ * const employee = await payroll.hire({ ... });
+ * ```
+ */
+export class Payroll<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  private _container: Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
   private _events: EventBus;
   private _plugins: PluginManager | null = null;
   private _initialized = false;
 
+  /**
+   * Create a new Payroll instance with its own container.
+   * Each instance is isolated - no shared global state.
+   */
   constructor() {
-    this._container = Container.getInstance();
+    // Each Payroll instance gets its own Container (no global singleton)
+    this._container = new Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>();
     this._events = createEventBus();
   }
 
@@ -106,7 +141,7 @@ export class Payroll {
   /**
    * Initialize Payroll with models and configuration
    */
-  initialize(config: PayrollInitConfig): this {
+  initialize(config: PayrollInitConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance>): this {
     const { EmployeeModel, PayrollRecordModel, TransactionModel, AttendanceModel, singleTenant, logger: customLogger, config: customConfig } = config;
 
     if (!EmployeeModel || !PayrollRecordModel || !TransactionModel) {
@@ -117,7 +152,8 @@ export class Payroll {
       setLogger(customLogger);
     }
 
-    initializeContainer({
+    // Initialize THIS instance's container (not the deprecated global one)
+    this._container.initialize({
       models: {
         EmployeeModel,
         PayrollRecordModel,
@@ -169,9 +205,9 @@ export class Payroll {
   }
 
   /**
-   * Get models
+   * Get models (strongly typed)
    */
-  private get models(): ModelsContainer {
+  private get models(): ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
     this.ensureInitialized();
     return this._container.getModels();
   }
@@ -213,7 +249,7 @@ export class Payroll {
   /**
    * Hire a new employee
    */
-  async hire(params: HireEmployeeParams): Promise<EmployeeDocument> {
+  async hire(params: HireEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { userId, employment, compensation, bankDetails, context } = params;
     const session = context?.session;
@@ -249,34 +285,38 @@ export class Payroll {
       bankDetails,
     });
 
-    const [employee] = await this.models.EmployeeModel.create([employeeData], { session });
+    // Use type assertion since we're creating with known-compatible data
+    const [employee] = await (this.models.EmployeeModel as Model<EmployeeDocument>).create(
+      [employeeData],
+      { session }
+    ) as unknown as [TEmployee];
 
     // Emit event
     this._events.emitSync('employee:hired', {
       employee: {
-        id: employee._id,
-        employeeId: employee.employeeId,
-        position: employee.position,
-        department: employee.department,
+        id: (employee as EmployeeDocument)._id,
+        employeeId: (employee as EmployeeDocument).employeeId,
+        position: (employee as EmployeeDocument).position,
+        department: (employee as EmployeeDocument).department,
       },
-      organizationId: employee.organizationId,
+      organizationId: (employee as EmployeeDocument).organizationId,
       context,
     });
 
     getLogger().info('Employee hired', {
-      employeeId: employee.employeeId,
+      employeeId: (employee as EmployeeDocument).employeeId,
       organizationId: organizationId.toString(),
       position: employment.position,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Update employment details
    * NOTE: Status changes to 'terminated' must use terminate() method
    */
-  async updateEmployment(params: UpdateEmploymentParams): Promise<EmployeeDocument> {
+  async updateEmployment(params: UpdateEmploymentParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, updates, context } = params;
     const session = context?.session;
@@ -304,7 +344,7 @@ export class Payroll {
     const allowedUpdates = ['department', 'position', 'employmentType', 'status', 'workSchedule'];
     for (const [key, value] of Object.entries(updates)) {
       if (allowedUpdates.includes(key)) {
-        (employee as Record<string, unknown>)[key] = value;
+        (employee as unknown as Record<string, unknown>)[key] = value;
       }
     }
 
@@ -315,13 +355,13 @@ export class Payroll {
       updates: Object.keys(updates),
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Terminate employee
    */
-  async terminate(params: TerminateEmployeeParams): Promise<EmployeeDocument> {
+  async terminate(params: TerminateEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, terminationDate = new Date(), reason = 'resignation', notes, context } = params;
     const session = context?.session;
@@ -362,13 +402,13 @@ export class Payroll {
       reason,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Re-hire terminated employee
    */
-  async reHire(params: ReHireEmployeeParams): Promise<EmployeeDocument> {
+  async reHire(params: ReHireEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, hireDate = new Date(), position, department, compensation, context } = params;
     const session = context?.session;
@@ -411,7 +451,7 @@ export class Payroll {
       employeeId: employee.employeeId,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
@@ -421,7 +461,7 @@ export class Payroll {
     employeeId: ObjectIdLike;
     populateUser?: boolean;
     session?: ClientSession;
-  }): Promise<EmployeeDocument> {
+  }): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, populateUser = true, session } = params;
 
@@ -434,14 +474,14 @@ export class Payroll {
       throw new EmployeeNotFoundError(employeeId.toString());
     }
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * List employees
    */
   async listEmployees(params: ListEmployeesParams): Promise<{
-    docs: EmployeeDocument[];
+    docs: TEmployee[];
     totalDocs: number;
     page: number;
     limit: number;
@@ -471,7 +511,7 @@ export class Payroll {
       this.models.EmployeeModel.countDocuments(query),
     ]);
 
-    return { docs, totalDocs, page, limit };
+    return { docs: docs as unknown as TEmployee[], totalDocs, page, limit };
   }
 
   // ========================================
@@ -481,7 +521,7 @@ export class Payroll {
   /**
    * Update employee salary
    */
-  async updateSalary(params: UpdateSalaryParams): Promise<EmployeeDocument> {
+  async updateSalary(params: UpdateSalaryParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, compensation, effectiveFrom = new Date(), context } = params;
     const session = context?.session;
@@ -535,13 +575,13 @@ export class Payroll {
       newSalary: employee.compensation.netSalary,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Add allowance to employee
    */
-  async addAllowance(params: AddAllowanceParams): Promise<EmployeeDocument> {
+  async addAllowance(params: AddAllowanceParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, type, amount, taxable = true, recurring = true, effectiveFrom = new Date(), effectiveTo, context } = params;
     const session = context?.session;
@@ -583,13 +623,13 @@ export class Payroll {
       amount,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Remove allowance from employee
    */
-  async removeAllowance(params: RemoveAllowanceParams): Promise<EmployeeDocument> {
+  async removeAllowance(params: RemoveAllowanceParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, type, context } = params;
     const session = context?.session;
@@ -628,13 +668,13 @@ export class Payroll {
       type,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Add deduction to employee
    */
-  async addDeduction(params: AddDeductionParams): Promise<EmployeeDocument> {
+  async addDeduction(params: AddDeductionParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, type, amount, auto = false, recurring = true, description, effectiveFrom = new Date(), effectiveTo, context } = params;
     const session = context?.session;
@@ -678,13 +718,13 @@ export class Payroll {
       auto,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Remove deduction from employee
    */
-  async removeDeduction(params: RemoveDeductionParams): Promise<EmployeeDocument> {
+  async removeDeduction(params: RemoveDeductionParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, type, context } = params;
     const session = context?.session;
@@ -723,13 +763,13 @@ export class Payroll {
       type,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   /**
    * Update bank details
    */
-  async updateBankDetails(params: UpdateBankDetailsParams): Promise<EmployeeDocument> {
+  async updateBankDetails(params: UpdateBankDetailsParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { employeeId, bankDetails, context } = params;
     const session = context?.session;
@@ -749,7 +789,7 @@ export class Payroll {
       employeeId: employee.employeeId,
     });
 
-    return employee;
+    return employee as TEmployee;
   }
 
   // ========================================
@@ -763,9 +803,11 @@ export class Payroll {
    * All database operations (PayrollRecord, Transaction, Employee stats) 
    * are atomic - either all succeed or all fail.
    */
-  async processSalary(params: ProcessSalaryParams): Promise<ProcessSalaryResult> {
+  async processSalary(
+    params: ProcessSalaryParams
+  ): Promise<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>> {
     this.ensureInitialized();
-    const { employeeId, month, year, paymentDate = new Date(), paymentMethod = 'bank', context } = params;
+    const { employeeId, month, year, paymentDate = new Date(), paymentMethod = 'bank', attendance, options, context } = params;
 
     // CRITICAL: Use provided session OR create a new transaction
     const providedSession = context?.session;
@@ -810,16 +852,20 @@ export class Payroll {
       }
 
       const period = { ...getPayPeriod(month, year), payDate: paymentDate };
-      const breakdown = await this.calculateSalaryBreakdown(employee, period, session);
+      const breakdown = await this.calculateSalaryBreakdown(employee, period, { attendance, options }, session);
 
       // Handle userId - could be ObjectId, populated doc, or null
       const userIdValue = employee.userId
         ? (typeof employee.userId === 'object' && '_id' in employee.userId
             ? (employee.userId as { _id: mongoose.Types.ObjectId })._id
-            : employee.userId)
-        : undefined;
+            : (employee.userId as mongoose.Types.ObjectId))
+        : null;
+      if (!userIdValue) {
+        throw new ValidationError('Employee is missing userId; cannot create payroll record', { field: 'userId' });
+      }
 
-      const [payrollRecord] = await this.models.PayrollRecordModel.create([{
+      // Use type assertions for generic model create operations
+      const [payrollRecord] = await (this.models.PayrollRecordModel as Model<PayrollRecordDocument>).create([{
         organizationId: employee.organizationId,
         employeeId: employee._id,
         userId: userIdValue,
@@ -829,9 +875,9 @@ export class Payroll {
         paymentMethod,
         processedAt: new Date(),
         processedBy: context?.userId ? toObjectId(context.userId) : undefined,
-      }], session ? { session } : {});
+      }], session ? { session } : {}) as unknown as [TPayrollRecord & PayrollRecordDocument];
 
-      const [transaction] = await this.models.TransactionModel.create([{
+      const [transaction] = await (this.models.TransactionModel as Model<AnyDocument>).create([{
         organizationId: employee.organizationId,
         type: 'expense',
         category: HRM_TRANSACTION_CATEGORIES.SALARY,
@@ -856,13 +902,13 @@ export class Payroll {
             net: breakdown.netSalary,
           },
         },
-      }], session ? { session } : {});
+      }], session ? { session } : {}) as unknown as [TTransaction & { _id: mongoose.Types.ObjectId }];
 
       // Update payroll record with transaction reference
-      payrollRecord.transactionId = transaction._id;
-      payrollRecord.status = 'paid';
-      payrollRecord.paidAt = paymentDate;
-      await payrollRecord.save(session ? { session } : {});
+      (payrollRecord as PayrollRecordDocument).transactionId = transaction._id;
+      (payrollRecord as PayrollRecordDocument).status = 'paid';
+      (payrollRecord as PayrollRecordDocument).paidAt = paymentDate;
+      await (payrollRecord as PayrollRecordDocument).save(session ? { session } : {});
 
       // Update employee payroll stats
       await this.updatePayrollStats(employee, breakdown.netSalary, paymentDate, session);
@@ -897,7 +943,11 @@ export class Payroll {
         amount: breakdown.netSalary,
       });
 
-      return { payrollRecord, transaction, employee };
+      return {
+        payrollRecord: payrollRecord as unknown as TPayrollRecord,
+        transaction: transaction as unknown as TTransaction,
+        employee: employee as unknown as TEmployee,
+      };
 
     } catch (error) {
       // Rollback transaction if we created it
@@ -922,7 +972,7 @@ export class Payroll {
    */
   async processBulkPayroll(params: ProcessBulkPayrollParams): Promise<BulkPayrollResult> {
     this.ensureInitialized();
-    const { organizationId, month, year, employeeIds = [], paymentDate = new Date(), paymentMethod = 'bank', context } = params;
+    const { organizationId, month, year, employeeIds = [], paymentDate = new Date(), paymentMethod = 'bank', options, context } = params;
 
     const query: Record<string, unknown> = { organizationId: toObjectId(organizationId), status: 'active' };
     if (employeeIds.length > 0) {
@@ -947,6 +997,7 @@ export class Payroll {
           year,
           paymentDate,
           paymentMethod,
+          options,
           context: { ...context, session: undefined }, // Don't pass session - let processSalary create its own
         });
 
@@ -996,7 +1047,7 @@ export class Payroll {
   /**
    * Get payroll history
    */
-  async payrollHistory(params: PayrollHistoryParams): Promise<PayrollRecordDocument[]> {
+  async payrollHistory(params: PayrollHistoryParams): Promise<TPayrollRecord[]> {
     this.ensureInitialized();
     const { employeeId, organizationId, month, year, status, pagination = {} } = params;
 
@@ -1061,7 +1112,7 @@ export class Payroll {
   /**
    * Export payroll data
    */
-  async exportPayroll(params: ExportPayrollParams): Promise<PayrollRecordDocument[]> {
+  async exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]> {
     this.ensureInitialized();
     const { organizationId, startDate, endDate } = params;
 
@@ -1095,7 +1146,7 @@ export class Payroll {
       count: records.length,
     });
 
-    return records;
+    return records as unknown as TPayrollRecord[];
   }
 
   // ========================================
@@ -1112,21 +1163,41 @@ export class Payroll {
   private async calculateSalaryBreakdown(
     employee: EmployeeDocument,
     period: { month: number; year: number; startDate: Date; endDate: Date; payDate: Date },
+    input: { attendance?: AttendanceInput | null; options?: PayrollProcessingOptions } = {},
     session?: ClientSession
   ): Promise<import('./types.js').PayrollBreakdown> {
     const comp = employee.compensation;
     let baseAmount = comp.baseAmount;
 
-    // Calculate working days in the period (excluding weekends)
-    const workingDaysInMonth = getWorkingDaysInMonth(period.year, period.month);
+    const options = input.options || {};
+
+    // Work schedule: prefer operation override, then employee schedule, then Mon-Fri default
+    const workDays =
+      options.workSchedule?.workDays ||
+      employee.workSchedule?.workingDays ||
+      [1, 2, 3, 4, 5];
+
+    const holidays = options.holidays || [];
+    const workingDaysInPeriod = countWorkingDays(period.startDate, period.endDate, {
+      workDays,
+      holidays,
+    }).workingDays;
     
     // Pro-rating calculation considering both hire date AND termination date
-    const proRating = this.calculateProRatingAdvanced(
+    const proRating = options.skipProration
+      ? {
+          isProRated: false,
+          ratio: 1,
+          periodWorkingDays: workingDaysInPeriod,
+          effectiveWorkingDays: workingDaysInPeriod,
+        }
+      : this.calculateProRatingAdvanced(
       employee.hireDate,
       employee.terminationDate || null,
       period.startDate,
       period.endDate,
-      workingDaysInMonth
+      workDays,
+      holidays
     );
 
     if (proRating.isProRated && this.config.payroll.allowProRating) {
@@ -1163,15 +1234,27 @@ export class Payroll {
 
     // Attendance deduction calculation (uses working days, not calendar days)
     let attendanceDeduction = 0;
-    if (this.models.AttendanceModel && this.config.payroll.attendanceIntegration) {
-      attendanceDeduction = await this.calculateAttendanceDeduction(
-        employee._id,
-        employee.organizationId,
-        period,
-        baseAmount / proRating.workingDays, // Daily rate based on working days
-        proRating.workingDays,
-        session
-      );
+    if (!options.skipAttendance && this.config.payroll.attendanceIntegration) {
+      // Expected working days depends on hire/termination range within this period.
+      const expectedDays = input.attendance?.expectedDays ?? proRating.effectiveWorkingDays;
+      const actualDays = input.attendance?.actualDays;
+
+      // Daily rate based on expected working days for THIS employee in THIS period.
+      const dailyRate = expectedDays > 0 ? baseAmount / expectedDays : 0;
+
+      if (input.attendance && actualDays !== undefined) {
+        const absentDays = Math.max(0, expectedDays - actualDays);
+        attendanceDeduction = Math.round(absentDays * dailyRate);
+      } else if (this.models.AttendanceModel) {
+        attendanceDeduction = await this.calculateAttendanceDeduction(
+          employee._id,
+          employee.organizationId,
+          period,
+          dailyRate,
+          expectedDays,
+          session
+        );
+      }
     }
 
     if (attendanceDeduction > 0) {
@@ -1221,8 +1304,8 @@ export class Payroll {
       netSalary,
       taxableAmount,
       taxAmount,
-      workingDays: proRating.workingDays,
-      actualDays: proRating.actualDays,
+      workingDays: proRating.periodWorkingDays,
+      actualDays: proRating.effectiveWorkingDays,
       proRatedAmount: proRating.isProRated ? baseAmount : 0,
       attendanceDeduction,
     };
@@ -1239,12 +1322,13 @@ export class Payroll {
     terminationDate: Date | null,
     periodStart: Date,
     periodEnd: Date,
-    workingDaysInMonth: number
+    workDays: number[],
+    holidays: Date[] = []
   ): {
     isProRated: boolean;
     ratio: number;
-    workingDays: number;
-    actualDays: number;
+    periodWorkingDays: number;
+    effectiveWorkingDays: number;
   } {
     const hire = new Date(hireDate);
     const termination = terminationDate ? new Date(terminationDate) : null;
@@ -1255,30 +1339,25 @@ export class Payroll {
     
     // If employee wasn't active during this period
     if (effectiveStart > periodEnd || (termination && termination < periodStart)) {
+      const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workDays, holidays }).workingDays;
       return {
         isProRated: true,
         ratio: 0,
-        workingDays: workingDaysInMonth,
-        actualDays: 0,
+        periodWorkingDays,
+        effectiveWorkingDays: 0,
       };
     }
     
-    // Calculate working days in the effective period
-    const totalDays = diffInDays(periodStart, periodEnd) + 1;
-    const actualDays = diffInDays(effectiveStart, effectiveEnd) + 1;
-    
-    // For working days calculation, we use a simple ratio
-    // A more accurate implementation would count actual working days
-    const ratio = actualDays / totalDays;
-    const actualWorkingDays = Math.round(workingDaysInMonth * ratio);
-    
-    const isProRated = hire > periodStart || (termination !== null && termination < periodEnd);
+    const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workDays, holidays }).workingDays;
+    const effectiveWorkingDays = countWorkingDays(effectiveStart, effectiveEnd, { workDays, holidays }).workingDays;
+    const ratio = periodWorkingDays > 0 ? Math.min(1, Math.max(0, effectiveWorkingDays / periodWorkingDays)) : 0;
+    const isProRated = ratio < 1;
 
     return {
       isProRated,
       ratio,
-      workingDays: workingDaysInMonth,
-      actualDays: actualWorkingDays,
+      periodWorkingDays,
+      effectiveWorkingDays,
     };
   }
 
@@ -1353,10 +1432,15 @@ export class Payroll {
   // ========================================
 
   /**
-   * Create a new Payroll instance
+   * Create a new Payroll instance with default types
    */
-  static create(): Payroll {
-    return new Payroll();
+  static create<
+    E extends EmployeeDocument = EmployeeDocument,
+    P extends PayrollRecordDocument = PayrollRecordDocument,
+    T extends AnyDocument = AnyDocument,
+    A extends AnyDocument = AnyDocument,
+  >(): Payroll<E, P, T, A> {
+    return new Payroll<E, P, T, A>();
   }
 }
 
@@ -1364,32 +1448,79 @@ export class Payroll {
 // Payroll Builder
 // ============================================================================
 
-export interface ModelsConfig {
-  EmployeeModel: Model<any>;
-  PayrollRecordModel: Model<any>;
-  TransactionModel: Model<any>;
-  AttendanceModel?: Model<any> | null;
+/**
+ * Generic models configuration - infers types from your models
+ */
+export interface ModelsConfig<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  EmployeeModel: Model<TEmployee>;
+  PayrollRecordModel: Model<TPayrollRecord>;
+  TransactionModel: Model<TTransaction>;
+  AttendanceModel?: Model<TAttendance> | null;
 }
 
-export interface PayrollBuilderOptions {
-  models?: ModelsConfig;
-  config?: DeepPartial<HRMConfig>;
-  singleTenant?: SingleTenantConfig | null;
-  logger?: Logger;
-}
-
-export class PayrollBuilder {
-  private _models: ModelsConfig | null = null;
+/**
+ * Generic Payroll Builder with full type inference.
+ *
+ * Types flow from withModels() through to build(), giving you a fully typed Payroll instance.
+ *
+ * @typeParam TEmployee - Inferred from EmployeeModel
+ * @typeParam TPayrollRecord - Inferred from PayrollRecordModel
+ * @typeParam TTransaction - Inferred from TransactionModel
+ * @typeParam TAttendance - Inferred from AttendanceModel
+ *
+ * @example
+ * ```typescript
+ * // Types are automatically inferred!
+ * const payroll = createPayrollInstance()
+ *   .withModels({
+ *     EmployeeModel,      // Model<MyEmployee>
+ *     PayrollRecordModel, // Model<MyPayroll>
+ *     TransactionModel,   // Model<MyTransaction>
+ *   })
+ *   .build(); // Returns Payroll<MyEmployee, MyPayroll, MyTransaction, AnyDocument>
+ * ```
+ */
+export class PayrollBuilder<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  private _models: ModelsConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance> | null = null;
   private _config: DeepPartial<HRMConfig> | undefined;
   private _singleTenant: SingleTenantConfig | null = null;
   private _logger: Logger | undefined;
 
   /**
-   * Set models
+   * Set models - types are inferred automatically
+   *
+   * @example
+   * ```typescript
+   * .withModels({
+   *   EmployeeModel,      // Your typed model
+   *   PayrollRecordModel,
+   *   TransactionModel,
+   *   AttendanceModel,    // Optional
+   * })
+   * ```
    */
-  withModels(models: ModelsConfig): this {
-    this._models = models;
-    return this;
+  withModels<
+    E extends EmployeeDocument,
+    P extends PayrollRecordDocument,
+    T extends AnyDocument,
+    A extends AnyDocument = AnyDocument,
+  >(
+    models: ModelsConfig<E, P, T, A>
+  ): PayrollBuilder<E, P, T, A> {
+    // Cast to new builder type with inferred generics
+    const builder = this as unknown as PayrollBuilder<E, P, T, A>;
+    builder._models = models;
+    return builder;
   }
 
   /**
@@ -1402,9 +1533,9 @@ export class PayrollBuilder {
 
   /**
    * Enable single-tenant mode
-   * 
+   *
    * Use this when building a single-organization HRM (no organizationId needed)
-   * 
+   *
    * @example
    * ```typescript
    * const payroll = createPayrollInstance()
@@ -1420,9 +1551,9 @@ export class PayrollBuilder {
 
   /**
    * Enable single-tenant mode (shorthand)
-   * 
+   *
    * Alias for withSingleTenant() - consistent with @classytic/clockin API
-   * 
+   *
    * @example
    * ```typescript
    * const payroll = createPayrollInstance()
@@ -1444,14 +1575,14 @@ export class PayrollBuilder {
   }
 
   /**
-   * Build and initialize Payroll instance
+   * Build and initialize Payroll instance with inferred types
    */
-  build(): Payroll {
+  build(): Payroll<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
     if (!this._models) {
       throw new Error('Models are required. Call withModels() first.');
     }
 
-    const payroll = new Payroll();
+    const payroll = new Payroll<TEmployee, TPayrollRecord, TTransaction, TAttendance>();
     payroll.initialize({
       EmployeeModel: this._models.EmployeeModel,
       PayrollRecordModel: this._models.PayrollRecordModel,
@@ -1477,33 +1608,5 @@ export function createPayrollInstance(): PayrollBuilder {
   return new PayrollBuilder();
 }
 
-// ============================================================================
-// Singleton Instance
-// ============================================================================
-
-let payrollInstance: Payroll | null = null;
-
-/**
- * Get or create singleton Payroll instance
- */
-export function getPayroll(): Payroll {
-  if (!payrollInstance) {
-    payrollInstance = new Payroll();
-  }
-  return payrollInstance;
-}
-
-/**
- * Reset singleton (for testing)
- */
-export function resetPayroll(): void {
-  payrollInstance = null;
-  Container.resetInstance();
-}
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const payroll = getPayroll();
-export default payroll;
+// NOTE: No singleton exports.
+// Use `createPayrollInstance().withModels(...).build()` to create instances.

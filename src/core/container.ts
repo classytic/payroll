@@ -1,71 +1,109 @@
 /**
  * @classytic/payroll - Dependency Container
  *
- * Simple dependency injection container for service management
- * Enables clean dependency injection and testing
+ * Per-instance dependency injection container for service management.
+ * Enables clean dependency injection and testing without global state.
+ *
+ * IMPORTANT: This container is instance-based (not a singleton) to support:
+ * - Serverless/Lambda environments
+ * - Multi-app runtimes
+ * - Parallel testing
+ * - Multiple Payroll instances in the same process
  */
 
 import type { Model, ClientSession } from 'mongoose';
-import type { Logger, HRMConfig, SingleTenantConfig } from '../types.js';
+import type {
+  Logger,
+  HRMConfig,
+  SingleTenantConfig,
+  EmployeeDocument,
+  PayrollRecordDocument,
+  AnyDocument,
+} from '../types.js';
 import { getLogger } from '../utils/logger.js';
 import { HRM_CONFIG, mergeConfig } from '../config.js';
 
 // ============================================================================
-// Container Types
+// Container Types with Strong Generics
 // ============================================================================
 
-export interface ModelsContainer {
-  EmployeeModel: Model<any>;
-  PayrollRecordModel: Model<any>;
-  TransactionModel: Model<any>;
-  AttendanceModel?: Model<any> | null;
+/**
+ * Strongly-typed models container
+ * Uses specific document types instead of Model<any> for better DX
+ */
+export interface ModelsContainer<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  EmployeeModel: Model<TEmployee>;
+  PayrollRecordModel: Model<TPayrollRecord>;
+  TransactionModel: Model<TTransaction>;
+  AttendanceModel?: Model<TAttendance> | null;
 }
 
-export interface ContainerConfig {
-  models: ModelsContainer;
+/**
+ * Container configuration with generic model types
+ */
+export interface ContainerConfig<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
   config?: Partial<HRMConfig>;
   singleTenant?: SingleTenantConfig | null;
   logger?: Logger;
 }
 
 // ============================================================================
-// Container Class
+// Container Class (Per-Instance, Not Singleton)
 // ============================================================================
 
-export class Container {
-  private static instance: Container | null = null;
-  
-  private _models: ModelsContainer | null = null;
+/**
+ * Per-instance DI Container for Payroll
+ *
+ * Each Payroll instance creates its own Container, avoiding global state issues
+ * in serverless and multi-app environments.
+ *
+ * @example
+ * ```typescript
+ * // Each Payroll instance has its own container
+ * const payroll1 = createPayrollInstance()
+ *   .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+ *   .build();
+ *
+ * const payroll2 = createPayrollInstance()
+ *   .withModels({ OtherEmployeeModel, OtherPayrollModel, OtherTransactionModel })
+ *   .build();
+ *
+ * // They don't share state - perfect for multi-tenant or testing
+ * ```
+ */
+export class Container<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  private _models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance> | null = null;
   private _config: HRMConfig = HRM_CONFIG;
   private _singleTenant: SingleTenantConfig | null = null;
   private _logger: Logger;
   private _initialized = false;
 
-  private constructor() {
+  constructor() {
     this._logger = getLogger();
-  }
-
-  /**
-   * Get singleton instance
-   */
-  static getInstance(): Container {
-    if (!Container.instance) {
-      Container.instance = new Container();
-    }
-    return Container.instance;
-  }
-
-  /**
-   * Reset instance (for testing)
-   */
-  static resetInstance(): void {
-    Container.instance = null;
   }
 
   /**
    * Initialize container with configuration
    */
-  initialize(config: ContainerConfig): void {
+  initialize(
+    config: ContainerConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance>
+  ): void {
     if (this._initialized) {
       this._logger.warn('Container already initialized, re-initializing');
     }
@@ -73,7 +111,7 @@ export class Container {
     this._models = config.models;
     this._config = mergeConfig(config.config);
     this._singleTenant = config.singleTenant ?? null;
-    
+
     if (config.logger) {
       this._logger = config.logger;
     }
@@ -97,6 +135,17 @@ export class Container {
   }
 
   /**
+   * Reset container (useful for testing)
+   */
+  reset(): void {
+    this._models = null;
+    this._config = HRM_CONFIG;
+    this._singleTenant = null;
+    this._initialized = false;
+    this._logger.info('Container reset');
+  }
+
+  /**
    * Ensure container is initialized
    */
   private ensureInitialized(): void {
@@ -108,41 +157,41 @@ export class Container {
   }
 
   /**
-   * Get models container
+   * Get models container (strongly typed)
    */
-  getModels(): ModelsContainer {
+  getModels(): ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
     this.ensureInitialized();
     return this._models!;
   }
 
   /**
-   * Get Employee model
+   * Get Employee model (strongly typed)
    */
-  getEmployeeModel(): Model<any> {
+  getEmployeeModel(): Model<TEmployee> {
     this.ensureInitialized();
     return this._models!.EmployeeModel;
   }
 
   /**
-   * Get PayrollRecord model
+   * Get PayrollRecord model (strongly typed)
    */
-  getPayrollRecordModel(): Model<any> {
+  getPayrollRecordModel(): Model<TPayrollRecord> {
     this.ensureInitialized();
     return this._models!.PayrollRecordModel;
   }
 
   /**
-   * Get Transaction model
+   * Get Transaction model (strongly typed)
    */
-  getTransactionModel(): Model<any> {
+  getTransactionModel(): Model<TTransaction> {
     this.ensureInitialized();
     return this._models!.TransactionModel;
   }
 
   /**
-   * Get Attendance model (optional)
+   * Get Attendance model (optional, strongly typed)
    */
-  getAttendanceModel(): Model<any> | null {
+  getAttendanceModel(): Model<TAttendance> | null {
     this.ensureInitialized();
     return this._models!.AttendanceModel ?? null;
   }
@@ -239,48 +288,99 @@ export class Container {
 }
 
 // ============================================================================
-// Convenience Functions
+// Factory Function
 // ============================================================================
 
 /**
- * Get container instance
+ * Create a new Container instance
+ */
+export function createContainer<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+>(): Container<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
+  return new Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>();
+}
+
+// ============================================================================
+// Default Instance (for backwards compatibility)
+// ============================================================================
+
+/**
+ * @deprecated Use createPayrollInstance() instead for new code.
+ * This default instance is kept for backwards compatibility but should be avoided
+ * in serverless/multi-app environments.
+ *
+ * WARNING: Global singletons can cause issues in:
+ * - AWS Lambda (cold starts may share state)
+ * - Vercel Functions
+ * - Multiple app instances in same process
+ * - Parallel tests
+ */
+let defaultContainer: Container | null = null;
+
+/**
+ * @deprecated Use createPayrollInstance() instead.
+ * Get or create the default container instance.
  */
 export function getContainer(): Container {
-  return Container.getInstance();
+  if (!defaultContainer) {
+    defaultContainer = new Container();
+  }
+  return defaultContainer;
 }
 
 /**
- * Initialize container
+ * @deprecated Use createPayrollInstance() instead.
+ * Initialize the default container.
  */
 export function initializeContainer(config: ContainerConfig): void {
-  Container.getInstance().initialize(config);
+  getContainer().initialize(config);
 }
 
 /**
- * Check if container is initialized
+ * @deprecated Use container.isInitialized() instead.
+ * Check if the default container is initialized.
  */
 export function isContainerInitialized(): boolean {
-  return Container.getInstance().isInitialized();
+  return defaultContainer?.isInitialized() ?? false;
 }
 
 /**
- * Get models from container
+ * @deprecated Use container.getModels() instead.
+ * Get models from the default container.
  */
 export function getModels(): ModelsContainer {
-  return Container.getInstance().getModels();
+  return getContainer().getModels();
 }
 
 /**
- * Get config from container
+ * @deprecated Use container.getConfig() instead.
+ * Get config from the default container.
  */
 export function getConfig(): HRMConfig {
-  return Container.getInstance().getConfig();
+  return getContainer().getConfig();
 }
 
 /**
- * Check if single-tenant mode
+ * @deprecated Use container.isSingleTenant() instead.
+ * Check if single-tenant mode.
  */
 export function isSingleTenant(): boolean {
-  return Container.getInstance().isSingleTenant();
+  return getContainer().isSingleTenant();
 }
 
+/**
+ * Reset the default container (for testing).
+ * @deprecated Prefer instance-based containers for testing.
+ */
+export function resetDefaultContainer(): void {
+  if (defaultContainer) {
+    defaultContainer.reset();
+  }
+  defaultContainer = null;
+}
+
+// Legacy alias for backwards compatibility
+export { resetDefaultContainer as resetContainer };

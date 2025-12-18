@@ -9,7 +9,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose, { Schema, model } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createAttendanceSchema, commonAttendanceFields, applyAttendanceIndexes } from '@classytic/clockin/schemas';
-import { createPayrollInstance, employmentFields, employeePlugin, payrollRecordSchema, getAttendance, getHolidays, createHolidaySchema } from '../src/index.js';
+import { createPayrollInstance, employmentFields, employeePlugin, createPayrollRecordSchema, getAttendance, getHolidays, createHolidaySchema } from '../src/index.js';
+import { countWorkingDays } from '../src/core/index.js';
 import { disableLogging } from '../src/utils/logger.js';
 
 // ============================================================================
@@ -75,7 +76,7 @@ const Employee = model('Employee', employeeSchema);
 
 // Other models
 const Attendance = model('Attendance', createAttendanceSchema());
-const PayrollRecord = model('PayrollRecord', payrollRecordSchema);
+const PayrollRecord = model('PayrollRecord', createPayrollRecordSchema());
 
 // User model (required for population)
 const userSchema = new Schema({
@@ -329,6 +330,58 @@ describe('Pro-Rating with Attendance', () => {
     // Should be prorated (hired mid-month)
     expect(result.payrollRecord.breakdown.baseAmount).toBeLessThan(100000);
     expect(result.payrollRecord.breakdown.proRatedAmount).toBeGreaterThan(0);
+  });
+
+  it('should NOT over-deduct attendance for mid-month hire (expected days should match employment period)', async () => {
+    // Create user first
+    const userDoc = await User.create({ name: 'Attendance Prorate User', email: 'attendance-prorate@example.com' });
+
+    // Hire on March 15 (mid-month)
+    const employee = await payroll.hire({
+      userId: userDoc._id,
+      organizationId: org,
+      employment: {
+        position: 'Engineer',
+        department: 'it',
+        type: 'full_time',
+        hireDate: new Date('2024-03-15'),
+      },
+      compensation: { baseAmount: 100000, currency: 'USD' },
+    });
+
+    // Expected working days ONLY for the employee's active range (Mar 15 -> Mar 31), Mon-Fri.
+    const expected = countWorkingDays(
+      new Date('2024-03-15'),
+      new Date('2024-03-31'),
+      { workDays: [1, 2, 3, 4, 5] }
+    ).workingDays;
+
+    // Create attendance record that matches perfect attendance for the active range
+    await Attendance.create({
+      tenantId: org,
+      targetId: employee._id,
+      targetModel: 'Employee',
+      year: 2024,
+      month: 3,
+      monthlyTotal: expected,
+      uniqueDaysVisited: expected,
+      fullDaysCount: expected,
+      halfDaysCount: 0,
+      paidLeaveDaysCount: 0,
+      overtimeDaysCount: 0,
+      totalWorkDays: expected,
+      checkIns: [],
+      visitedDays: [],
+    });
+
+    const result = await payroll.processSalary({
+      employeeId: employee._id,
+      month: 3,
+      year: 2024,
+    });
+
+    // No attendance deduction when attendance matches expected working days for the employment window.
+    expect(result.payrollRecord.breakdown.attendanceDeduction).toBe(0);
   });
 });
 

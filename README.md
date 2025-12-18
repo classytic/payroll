@@ -28,18 +28,19 @@ npm install @classytic/payroll @classytic/clockin mongoose
 
 ```typescript
 import mongoose from 'mongoose';
-import { createAttendanceSchema } from '@classytic/clockin/schemas';
-import { employeeSchema, employeePlugin, payrollRecordSchema, createHolidaySchema } from '@classytic/payroll';
+import { createAttendanceSchema } from '@classytic/clockin';
+import { createEmployeeSchema, createPayrollRecordSchema, employeePlugin, createHolidaySchema } from '@classytic/payroll';
 
 // Attendance (from ClockIn - required for payroll)
 const Attendance = mongoose.model('Attendance', createAttendanceSchema());
 
-// Employee (with payroll plugin)
+// Employee (create schema + apply payroll plugin)
+const employeeSchema = createEmployeeSchema();
 employeeSchema.plugin(employeePlugin);
 const Employee = mongoose.model('Employee', employeeSchema);
 
 // PayrollRecord
-const PayrollRecord = mongoose.model('PayrollRecord', payrollRecordSchema);
+const PayrollRecord = mongoose.model('PayrollRecord', createPayrollRecordSchema());
 
 // Transaction (your own model)
 const Transaction = mongoose.model('Transaction', transactionSchema);
@@ -130,8 +131,8 @@ import { ClockIn } from '@classytic/clockin';
 import { getAttendance } from '@classytic/payroll';
 
 // Initialize ClockIn
-const clockin = ClockIn.create()
-  .withModels({ Attendance, Membership: Employee })
+const clockin = await ClockIn.create()
+  .withModels({ Attendance, Employee })
   .build();
 
 // Employees check in
@@ -195,6 +196,7 @@ await payroll.processSalary({
 Control logging in production:
 
 ```typescript
+import { createPayrollInstance } from '@classytic/payroll';
 import { disableLogging, enableLogging } from '@classytic/payroll/utils';
 
 // Disable in production
@@ -203,15 +205,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Or use custom logger
-payroll.initialize({
-  ...models,
-  logger: {
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel, AttendanceModel })
+  .withLogger({
     info: (msg, meta) => pino.info(meta, msg),
     error: (msg, meta) => pino.error(meta, msg),
     warn: (msg, meta) => pino.warn(meta, msg),
     debug: (msg, meta) => pino.debug(meta, msg),
-  },
-});
+  })
+  .build();
 ```
 
 ## API
@@ -240,7 +242,7 @@ import { calculateSalaryBreakdown, countWorkingDays, calculateTax } from '@class
 
 ## Related Packages
 
-- **[@classytic/clockin](https://npmjs.com/package/@classytic/clockin)** - Attendance management (required peer dependency)
+- **[@classytic/clockin](https://npmjs.com/package/@classytic/clockin)** - Attendance management (optional peer dependency for attendance-based deductions)
 
 ## License
 

@@ -12,9 +12,10 @@ import type {
   Document,
   ClientSession,
   Types,
-  Schema,
-  UpdateQuery,
 } from 'mongoose';
+import type { AttendanceInput, PayrollProcessingOptions } from './core/config.js';
+import type { PayrollPluginDefinition } from './core/plugin.js';
+import type { PayrollEventMap, PayrollEventType } from './core/events.js';
 
 /** Query filter type */
 export type FilterQuery<T> = {
@@ -279,16 +280,21 @@ export interface SingleTenantConfig {
   autoInject?: boolean;
 }
 
-/** Main Payroll initialization config */
-export interface PayrollInitConfig {
-  /** Employee model (required) */
-  EmployeeModel: Model<any>;
-  /** Payroll record model (required) */
-  PayrollRecordModel: Model<any>;
-  /** Transaction model (required) */
-  TransactionModel: Model<any>;
-  /** Attendance model (optional, for integration) */
-  AttendanceModel?: Model<any> | null;
+/** Main Payroll initialization config with strong generics */
+export interface PayrollInitConfig<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  /** Employee model (required) - strongly typed */
+  EmployeeModel: Model<TEmployee>;
+  /** Payroll record model (required) - strongly typed */
+  PayrollRecordModel: Model<TPayrollRecord>;
+  /** Transaction model (required) - strongly typed */
+  TransactionModel: Model<TTransaction>;
+  /** Attendance model (optional, for integration) - strongly typed */
+  AttendanceModel?: Model<TAttendance> | null;
   /** Single-tenant configuration */
   singleTenant?: SingleTenantConfig | null;
   /** Custom logger */
@@ -406,7 +412,12 @@ export interface PayrollStats {
 /** Employee document structure */
 export interface EmployeeDocument extends Document {
   _id: ObjectId;
-  userId: ObjectId;
+  /**
+   * User reference. In real Mongoose usage this can be either:
+   * - an ObjectId
+   * - a populated user document containing at least `_id`
+   */
+  userId: ObjectId | { _id: ObjectId; name?: string; email?: string; phone?: string };
   organizationId: ObjectId;
   employeeId: string;
   employmentType: EmploymentType;
@@ -469,7 +480,7 @@ export interface PayrollRecordDocument extends Document {
   _id: ObjectId;
   organizationId: ObjectId;
   employeeId: ObjectId;
-  userId?: ObjectId;
+  userId: ObjectId;
   period: PayrollPeriod;
   breakdown: PayrollBreakdown;
   transactionId?: ObjectId | null;
@@ -703,6 +714,16 @@ export interface ProcessSalaryParams {
   paymentDate?: Date;
   /** Payment method */
   paymentMethod?: PaymentMethod;
+  /**
+   * Optional attendance override (useful when embedding into any HRM system).
+   * If provided, payroll will use this instead of querying AttendanceModel.
+   */
+  attendance?: AttendanceInput | null;
+  /**
+   * Optional processing options (holidays/work schedule/skip flags).
+   * This aligns with the pure functions in `@classytic/payroll/core`.
+   */
+  options?: PayrollProcessingOptions;
   /** Operation context */
   context?: OperationContext;
 }
@@ -721,6 +742,11 @@ export interface ProcessBulkPayrollParams {
   paymentDate?: Date;
   /** Payment method */
   paymentMethod?: PaymentMethod;
+  /**
+   * Optional processing options (holidays/work schedule/skip flags).
+   * Passed through to each employee's salary processing.
+   */
+  options?: PayrollProcessingOptions;
   /** Operation context */
   context?: OperationContext;
 }
@@ -771,11 +797,15 @@ export interface ExportPayrollParams {
 // Result Types
 // ============================================================================
 
-/** Process salary result */
-export interface ProcessSalaryResult {
-  payrollRecord: PayrollRecordDocument;
-  transaction: AnyDocument;
-  employee: EmployeeDocument;
+/** Process salary result (generic for best DX) */
+export interface ProcessSalaryResult<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+> {
+  payrollRecord: TPayrollRecord;
+  transaction: TTransaction;
+  employee: TEmployee;
 }
 
 /** Bulk payroll result */
@@ -822,32 +852,87 @@ export interface CompensationBreakdownResult {
 // Plugin Types
 // ============================================================================
 
-/** Payroll instance for plugin reference */
-export interface PayrollInstance {
-  /** Models container */
-  _models: {
-    EmployeeModel: Model<any>;
-    PayrollRecordModel: Model<any>;
-    TransactionModel: Model<any>;
-    AttendanceModel?: Model<any> | null;
-  } | null;
-  /** Event hooks */
-  _hooks: Map<string, Array<(data: unknown) => void | Promise<void>>>;
-  /** Is initialized */
-  _initialized: boolean;
-  /** Register event listener */
-  on(event: string, listener: (data: unknown) => void | Promise<void>): this;
-  /** Emit event */
-  emit(event: string, data: unknown): void;
+/**
+ * Payroll instance interface (public surface) used for plugin typing.
+ * This matches the actual `Payroll` class and keeps generics flowing.
+ */
+export interface PayrollInstance<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+  TAttendance extends AnyDocument = AnyDocument,
+> {
+  /** Check if initialized */
+  isInitialized(): boolean;
+
+  // ========================================
+  // Plugin & Events
+  // ========================================
+
+  /** Register a plugin */
+  use(plugin: PayrollPluginDefinition): Promise<this>;
+
+  /** Subscribe to typed payroll events */
+  on<K extends PayrollEventType>(
+    event: K,
+    handler: (payload: PayrollEventMap[K]) => void | Promise<void>
+  ): () => void;
+
+  // ========================================
+  // Employment Lifecycle
+  // ========================================
+
+  hire(params: HireEmployeeParams): Promise<TEmployee>;
+  getEmployee(params: {
+    employeeId: ObjectIdLike;
+    populateUser?: boolean;
+    session?: ClientSession;
+  }): Promise<TEmployee>;
+  updateEmployment(params: UpdateEmploymentParams): Promise<TEmployee>;
+  terminate(params: TerminateEmployeeParams): Promise<TEmployee>;
+  reHire(params: ReHireEmployeeParams): Promise<TEmployee>;
+  listEmployees(params: ListEmployeesParams): Promise<{
+    docs: TEmployee[];
+    totalDocs: number;
+    page: number;
+    limit: number;
+  }>;
+
+  // ========================================
+  // Compensation Management
+  // ========================================
+
+  updateSalary(params: UpdateSalaryParams): Promise<TEmployee>;
+  addAllowance(params: AddAllowanceParams): Promise<TEmployee>;
+  removeAllowance(params: RemoveAllowanceParams): Promise<TEmployee>;
+  addDeduction(params: AddDeductionParams): Promise<TEmployee>;
+  removeDeduction(params: RemoveDeductionParams): Promise<TEmployee>;
+  updateBankDetails(params: UpdateBankDetailsParams): Promise<TEmployee>;
+
+  // ========================================
+  // Payroll Processing
+  // ========================================
+
+  processSalary(
+    params: ProcessSalaryParams
+  ): Promise<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>>;
+
+  processBulkPayroll(params: ProcessBulkPayrollParams): Promise<BulkPayrollResult>;
+
+  payrollHistory(params: PayrollHistoryParams): Promise<TPayrollRecord[]>;
+  payrollSummary(params: PayrollSummaryParams): Promise<PayrollSummaryResult>;
+  exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]>;
+
   /** Extended properties from plugins */
   [key: string]: unknown;
 }
 
-/** Plugin interface */
+/**
+ * @deprecated Use `PayrollPluginDefinition` from `@classytic/payroll/core`.
+ * This legacy plugin shape is kept for compatibility with older code.
+ */
 export interface PayrollPlugin {
-  /** Plugin name */
   name: string;
-  /** Apply plugin to Payroll instance */
   apply(payroll: PayrollInstance): void;
 }
 

@@ -44,12 +44,12 @@ npm install @classytic/payroll mongoose
 ### Initialize with Attendance
 
 ```typescript
-import { createPayrollInstance } from '@classytic/payroll';
+import { createPayrollInstance, createPayrollRecordSchema } from '@classytic/payroll';
 import mongoose from 'mongoose';
 
 // Your models
 const EmployeeModel = mongoose.model('Employee', employeeSchema);
-const PayrollRecordModel = mongoose.model('PayrollRecord', payrollRecordSchema);
+const PayrollRecordModel = mongoose.model('PayrollRecord', createPayrollRecordSchema());
 const TransactionModel = mongoose.model('Transaction', transactionSchema);
 const AttendanceModel = mongoose.model('Attendance', attendanceSchema);
 
@@ -152,7 +152,7 @@ const customAttendanceSchema = new mongoose.Schema({
 
 // IMPORTANT: Unique index for efficient queries
 customAttendanceSchema.index(
-  { tenantId: 1, targetId: 1, year: 1, month: 1 },
+  { tenantId: 1, targetModel: 1, targetId: 1, year: 1, month: 1 },
   { unique: true }
 );
 
@@ -247,7 +247,7 @@ Before enabling attendance integration, verify:
 - [ ] Model has `year` field (Number)
 - [ ] Model has `month` field (Number, 1-12)
 - [ ] Model has `totalWorkDays` field (Number, decimal)
-- [ ] Compound index on `(tenantId, targetId, year, month)`
+- [ ] Compound index on `(tenantId, targetModel, targetId, year, month)`
 - [ ] `totalWorkDays` is calculated correctly before payroll runs
 
 ---

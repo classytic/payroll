@@ -7,51 +7,42 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import {
-  // Main exports
   Payroll,
   PayrollBuilder,
   createPayrollInstance,
-  getPayroll,
-  resetPayroll,
-
-  // Enums
   EMPLOYMENT_TYPE,
   EMPLOYEE_STATUS,
   DEPARTMENT,
   PAYMENT_FREQUENCY,
   PAYROLL_STATUS,
-
-  // Config
   HRM_CONFIG,
   mergeConfig,
-
-  // Utils
+  PayrollError,
+  NotInitializedError,
+  EmployeeNotFoundError,
+} from '../src/index.js';
+import {
+  // Date utilities
   addDays,
   addMonths,
   startOfMonth,
   endOfMonth,
   diffInDays,
+  // Calculation utilities
   sum,
   sumBy,
   calculateGross,
   calculateNet,
+  // Validation utilities
   isActive,
   isTerminated,
   canReceiveSalary,
-
-  // Query Builders
+  // Query builders
   QueryBuilder,
-  EmployeeQueryBuilder,
-  PayrollQueryBuilder,
   employee,
   payroll,
   toObjectId,
-
-  // Errors
-  PayrollError,
-  NotInitializedError,
-  EmployeeNotFoundError,
-} from '../src/index.js';
+} from '../src/utils/index.js';
 
 // ============================================================================
 // Export Tests
@@ -62,8 +53,6 @@ describe('Package Exports', () => {
     expect(Payroll).toBeDefined();
     expect(PayrollBuilder).toBeDefined();
     expect(createPayrollInstance).toBeDefined();
-    expect(getPayroll).toBeDefined();
-    expect(resetPayroll).toBeDefined();
   });
 
   it('should export enum constants', () => {
@@ -103,8 +92,6 @@ describe('Package Exports', () => {
 
   it('should export query builders', () => {
     expect(QueryBuilder).toBeDefined();
-    expect(EmployeeQueryBuilder).toBeDefined();
-    expect(PayrollQueryBuilder).toBeDefined();
     expect(employee).toBeDefined();
     expect(payroll).toBeDefined();
     expect(toObjectId).toBeDefined();

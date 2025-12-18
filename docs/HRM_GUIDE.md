@@ -55,7 +55,8 @@ export const Attendance = model('Attendance', createAttendanceSchema());
 // models/employee.ts
 import { Schema, model } from 'mongoose';
 import { commonAttendanceFields, applyAttendanceIndexes } from '@classytic/clockin/schemas';
-import { employmentFields, employeePlugin } from '@classytic/payroll/schemas';
+import { employmentFields } from '@classytic/payroll/schemas';
+import { employeePlugin } from '@classytic/payroll';
 
 const employeeSchema = new Schema({
   // Core fields
@@ -85,9 +86,9 @@ export const Employee = model('Employee', employeeSchema);
 ```typescript
 // models/payroll-record.ts
 import { model } from 'mongoose';
-import { payrollRecordSchema } from '@classytic/payroll/schemas';
+import { createPayrollRecordSchema } from '@classytic/payroll';
 
-export const PayrollRecord = model('PayrollRecord', payrollRecordSchema);
+export const PayrollRecord = model('PayrollRecord', createPayrollRecordSchema());
 ```
 
 ### 5. Holiday
@@ -133,8 +134,8 @@ import { createPayrollInstance } from '@classytic/payroll';
 import { Attendance, Employee, PayrollRecord, Transaction, Holiday } from '../models';
 
 // Initialize attendance
-export const clockin = ClockIn.create()
-  .withModels({ Attendance, Membership: Employee })
+export const clockin = await ClockIn.create()
+  .withModels({ Attendance, Employee })
   .build();
 
 // Initialize payroll
@@ -153,7 +154,8 @@ export const payroll = createPayrollInstance()
 ```typescript
 // services/hrm.service.ts
 import { clockin, payroll } from './hrm';
-import { getAttendance, getHolidays, countWorkingDays } from '@classytic/payroll';
+import { getAttendance, getHolidays } from '@classytic/payroll';
+import { countWorkingDays } from '@classytic/payroll/core';
 import { Holiday } from '../models';
 
 export class HRMService {
@@ -411,9 +413,11 @@ console.log(preview);
 - **Don't process without attendance** - deductions won't work
 - **Don't ignore transactions** - use them for atomicity
 
-## 📚 Full API Reference
+## 📚 Related Documentation
 
-See [docs/HRM_GUIDE.md](./docs/HRM_GUIDE.md) for complete documentation.
+- [README.md](../README.md) - Quick start guide
+- [INTEGRATION.md](./INTEGRATION.md) - Attendance integration details
+- [SINGLE_TENANT.md](./SINGLE_TENANT.md) - Single-tenant setup
 
 ## License
 
