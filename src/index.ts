@@ -22,14 +22,108 @@ export {
 // ============================================================================
 
 export type {
+  // Core types
   ObjectIdLike,
+  AnyDocument,
+  AnyModel,
+  DeepPartial,
+  Nullable,
+  FilterQuery,
+
+  // Configuration types
   PayrollInitConfig,
   HRMConfig,
   SingleTenantConfig,
   OperationContext,
   PayrollInstance,
   Logger,
-  DeepPartial,
+  DataRetentionConfig,
+  PayrollConfig,
+  SalaryConfig,
+  EmploymentConfig,
+  ValidationConfig,
+  TaxBracket,
+  SalaryBandRange,
+  RoleMappingConfig,
+
+  // Document types
+  EmployeeDocument,
+  PayrollRecordDocument,
+
+  // Sub-document / Schema types
+  Compensation,
+  BankDetails,
+  Allowance,
+  Deduction,
+  WorkSchedule,
+  PayrollStats,
+  PayrollPeriod,
+  PayrollBreakdown,
+  EmploymentHistoryEntry,
+  UserReference,
+
+  // Enum types
+  AllowanceType,
+  DeductionType,
+  EmploymentType,
+  EmployeeStatus,
+  Department,
+  TerminationReason,
+  PaymentMethod,
+  PayrollStatus,
+  PaymentFrequency,
+  HRMTransactionCategory,
+  SalaryBand,
+  OrgRole,
+
+  // Operation parameter types
+  HireEmployeeParams,
+  UpdateEmploymentParams,
+  TerminateEmployeeParams,
+  ReHireEmployeeParams,
+  ListEmployeesParams,
+  UpdateSalaryParams,
+  AddAllowanceParams,
+  RemoveAllowanceParams,
+  AddDeductionParams,
+  RemoveDeductionParams,
+  UpdateBankDetailsParams,
+  ProcessSalaryParams,
+  ProcessBulkPayrollParams,
+  PayrollHistoryParams,
+  PayrollSummaryParams,
+  ExportPayrollParams,
+
+  // Result types
+  ProcessSalaryResult,
+  BulkPayrollResult,
+  PayrollSummaryResult,
+  TaxCalculationResult,
+  CompensationBreakdownResult,
+
+  // Plugin types
+  PayrollPlugin,
+  PluginFunction,
+  PluginType,
+
+  // Event types
+  PayrollEvent,
+  EventPayloadBase,
+  EmployeeHiredEvent,
+  SalaryProcessedEvent,
+  EventPayload,
+
+  // Error types
+  ErrorCode,
+  HttpError,
+
+  // Utility types
+  ProRatingResult,
+  PayPeriodInfo,
+  EmployeeValidationResult,
+  QueryOptions,
+  PayrollEmployee,
+  WithPayroll,
 } from './types.js';
 
 // ============================================================================

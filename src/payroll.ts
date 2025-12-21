@@ -12,6 +12,7 @@ import type {
   SingleTenantConfig,
   Logger,
   ObjectIdLike,
+  PayrollInstance,
   EmployeeDocument,
   PayrollRecordDocument,
   AnyDocument,
@@ -118,7 +119,8 @@ export class Payroll<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
-> {
+> implements PayrollInstance<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
+  [key: string]: unknown;
   private _container: Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
   private _events: EventBus;
   private _plugins: PluginManager | null = null;
@@ -167,7 +169,7 @@ export class Payroll<
 
     // Setup plugin manager
     const pluginContext: PluginContext = {
-      payroll: this as unknown as import('./types.js').PayrollInstance,
+      payroll: this,
       events: this._events,
       logger: getLogger(),
       getConfig: <T = unknown>(key: string): T | undefined => {
@@ -1482,7 +1484,7 @@ export interface ModelsConfig<
  *     PayrollRecordModel, // Model<MyPayroll>
  *     TransactionModel,   // Model<MyTransaction>
  *   })
- *   .build(); // Returns Payroll<MyEmployee, MyPayroll, MyTransaction, AnyDocument>
+ *   .build(); // Returns PayrollInstance<MyEmployee, MyPayroll, MyTransaction, AnyDocument>
  * ```
  */
 export class PayrollBuilder<
@@ -1577,7 +1579,7 @@ export class PayrollBuilder<
   /**
    * Build and initialize Payroll instance with inferred types
    */
-  build(): Payroll<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
+  build(): PayrollInstance<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
     if (!this._models) {
       throw new Error('Models are required. Call withModels() first.');
     }
