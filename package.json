@@ -1,6 +1,6 @@
 {
   "name": "@classytic/payroll",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "description": "Modern HRM and payroll management for Mongoose - Plugin-based, event-driven, multi-tenant ready. Salary processing, compensation management, tax calculations, and employee lifecycle management.",
   "type": "module",
   "main": "./dist/index.js",
@@ -61,8 +61,8 @@
   },
   "homepage": "https://github.com/classytic/payroll#readme",
   "peerDependencies": {
-    "mongoose": "^8.0.0 || ^9.0.0",
-    "@classytic/clockin": "^2.0.0"
+    "@classytic/clockin": "^2.0.0",
+    "mongoose": "^8.0.0 || ^9.0.0"
   },
   "peerDependenciesMeta": {
     "@classytic/clockin": {
@@ -97,5 +97,9 @@
     "release:patch": "npm version patch && npm run release",
     "release:minor": "npm version minor && npm run release",
     "release:major": "npm version major && npm run release"
+  },
+  "dependencies": {
+    "lru-cache": "^11.2.4",
+    "p-limit": "^7.2.0"
   }
 }

@@ -34,7 +34,9 @@ import type {
   ExportPayrollParams,
   ProcessSalaryResult,
   BulkPayrollResult,
+  BulkPayrollProgress,
   PayrollSummaryResult,
+  PaymentMethod,
   DeepPartial,
   Allowance,
   Deduction,
@@ -585,12 +587,12 @@ export class Payroll<
    */
   async addAllowance(params: AddAllowanceParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, amount, taxable = true, recurring = true, effectiveFrom = new Date(), effectiveTo, context } = params;
+    const { employeeId, type, amount, isPercentage, value, taxable = true, recurring = true, effectiveFrom = new Date(), effectiveTo, context } = params;
     const session = context?.session;
 
     let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
     if (session) query = query.session(session);
-    
+
     const employee = await query;
     if (!employee) {
       throw new EmployeeNotFoundError(employeeId.toString());
@@ -608,6 +610,8 @@ export class Payroll<
       type,
       name: type,
       amount,
+      isPercentage,
+      value,
       taxable,
       recurring,
       effectiveFrom,
@@ -678,12 +682,12 @@ export class Payroll<
    */
   async addDeduction(params: AddDeductionParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, amount, auto = false, recurring = true, description, effectiveFrom = new Date(), effectiveTo, context } = params;
+    const { employeeId, type, amount, isPercentage, value, auto = false, recurring = true, description, effectiveFrom = new Date(), effectiveTo, context } = params;
     const session = context?.session;
 
     let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
     if (session) query = query.session(session);
-    
+
     const employee = await query;
     if (!employee) {
       throw new EmployeeNotFoundError(employeeId.toString());
@@ -701,6 +705,8 @@ export class Payroll<
       type,
       name: type,
       amount,
+      isPercentage,
+      value,
       auto,
       recurring,
       description,
@@ -966,58 +972,219 @@ export class Payroll<
   }
 
   /**
-   * Process bulk payroll
-   * 
+   * Process bulk payroll for multiple employees
+   *
    * ATOMICITY STRATEGY: Each employee is processed in its own transaction.
    * This allows partial success - some employees can succeed while others fail.
    * Failed employees don't affect successful ones.
+   *
+   * NEW FEATURES (all optional, backward compatible):
+   * - Progress tracking via onProgress callback
+   * - Cancellation support via AbortSignal
+   * - Batch processing to prevent resource exhaustion
+   * - Concurrency control for parallel processing
+   *
+   * @example Basic usage (unchanged)
+   * ```typescript
+   * const result = await payroll.processBulkPayroll({
+   *   organizationId, month, year
+   * });
+   * ```
+   *
+   * @example With progress tracking
+   * ```typescript
+   * await payroll.processBulkPayroll({
+   *   organizationId, month, year,
+   *   onProgress: (p) => console.log(`${p.percentage}% done`)
+   * });
+   * ```
+   *
+   * @example With job queue integration
+   * ```typescript
+   * await payroll.processBulkPayroll({
+   *   organizationId, month, year,
+   *   batchSize: 10,
+   *   onProgress: async (p) => {
+   *     await Job.findByIdAndUpdate(jobId, { progress: p });
+   *   }
+   * });
+   * ```
+   *
+   * @example With cancellation
+   * ```typescript
+   * const controller = new AbortController();
+   * payroll.processBulkPayroll({ signal: controller.signal });
+   * // Later: controller.abort();
+   * ```
    */
   async processBulkPayroll(params: ProcessBulkPayrollParams): Promise<BulkPayrollResult> {
     this.ensureInitialized();
-    const { organizationId, month, year, employeeIds = [], paymentDate = new Date(), paymentMethod = 'bank', options, context } = params;
+    const {
+      organizationId,
+      month,
+      year,
+      employeeIds = [],
+      paymentDate = new Date(),
+      paymentMethod = 'bank',
+      options,
+      context,
+      // Progress and control params
+      onProgress,
+      signal,
+      batchSize = 10,
+      batchDelay = 0,
+      concurrency = 1,
+      useStreaming,
+    } = params;
 
     const query: Record<string, unknown> = { organizationId: toObjectId(organizationId), status: 'active' };
     if (employeeIds.length > 0) {
       query._id = { $in: employeeIds.map(toObjectId) };
     }
 
+    // Auto-detect streaming: use for >10k employees
+    const employeeCount = await this.models.EmployeeModel.countDocuments(query);
+    const shouldStream = useStreaming ?? (employeeCount > 10000);
+
+    // Use streaming for large datasets
+    if (shouldStream) {
+      return this.processBulkPayrollStreaming({
+        query,
+        month,
+        year,
+        paymentDate,
+        paymentMethod,
+        options,
+        context,
+        signal,
+        batchSize,
+        batchDelay,
+        concurrency,
+        onProgress,
+        total: employeeCount,
+      });
+    }
+
+    // Original implementation for smaller datasets
     const employees = await this.models.EmployeeModel.find(query);
+    const total = employees.length;
 
     const results: BulkPayrollResult = {
       successful: [],
       failed: [],
-      total: employees.length,
+      total,
     };
 
-    // Process each employee in its own transaction for isolation
-    for (const employee of employees) {
-      try {
-        // Each processSalary call manages its own transaction
-        const result = await this.processSalary({
-          employeeId: employee._id,
-          month,
-          year,
-          paymentDate,
-          paymentMethod,
-          options,
-          context: { ...context, session: undefined }, // Don't pass session - let processSalary create its own
+    // Helper to report progress
+    const reportProgress = async (currentEmployee?: string) => {
+      if (onProgress) {
+        const processed = results.successful.length + results.failed.length;
+        await onProgress({
+          processed,
+          total,
+          successful: results.successful.length,
+          failed: results.failed.length,
+          currentEmployee,
+          percentage: total > 0 ? Math.round((processed / total) * 100) : 0,
         });
+      }
+    };
 
-        results.successful.push({
-          employeeId: employee.employeeId,
-          amount: result.payrollRecord.breakdown.netSalary,
-          transactionId: result.transaction._id,
+    // Process in batches
+    for (let i = 0; i < employees.length; i += batchSize) {
+      // Check for cancellation before each batch
+      if (signal?.aborted) {
+        getLogger().warn('Bulk payroll cancelled', {
+          organizationId: organizationId.toString(),
+          processed: results.successful.length + results.failed.length,
+          total,
         });
-      } catch (error) {
-        results.failed.push({
-          employeeId: employee.employeeId,
-          error: (error as Error).message,
-        });
+        throw new Error('Payroll processing cancelled by user');
+      }
 
-        getLogger().error('Failed to process salary', {
-          employeeId: employee.employeeId,
-          error: (error as Error).message,
-        });
+      const batch = employees.slice(i, i + batchSize);
+
+      if (concurrency === 1) {
+        // SEQUENTIAL (default, safest)
+        for (const employee of batch) {
+          if (signal?.aborted) throw new Error('Payroll processing cancelled by user');
+
+          try {
+            const result = await this.processSalary({
+              employeeId: employee._id,
+              month,
+              year,
+              paymentDate,
+              paymentMethod,
+              options,
+              context: { ...context, session: undefined },
+            });
+
+            results.successful.push({
+              employeeId: employee.employeeId,
+              amount: result.payrollRecord.breakdown.netSalary,
+              transactionId: result.transaction._id,
+            });
+          } catch (error) {
+            results.failed.push({
+              employeeId: employee.employeeId,
+              error: (error as Error).message,
+            });
+
+            getLogger().error('Failed to process salary', {
+              employeeId: employee.employeeId,
+              error: (error as Error).message,
+            });
+          }
+
+          await reportProgress(employee.employeeId);
+        }
+      } else {
+        // CONCURRENT (faster, more resources)
+        const batchResults = await Promise.allSettled(
+          batch.map((employee) =>
+            this.processSalary({
+              employeeId: employee._id,
+              month,
+              year,
+              paymentDate,
+              paymentMethod,
+              options,
+              context: { ...context, session: undefined },
+            }).then((result) => ({ employee, result }))
+          )
+        );
+
+        // Aggregate batch results
+        for (let j = 0; j < batchResults.length; j++) {
+          const batchResult = batchResults[j];
+          const employee = batch[j];
+
+          if (batchResult.status === 'fulfilled') {
+            results.successful.push({
+              employeeId: batchResult.value.employee.employeeId,
+              amount: batchResult.value.result.payrollRecord.breakdown.netSalary,
+              transactionId: batchResult.value.result.transaction._id,
+            });
+          } else {
+            results.failed.push({
+              employeeId: employee.employeeId,
+              error: (batchResult.reason as Error).message || 'Unknown error',
+            });
+
+            getLogger().error('Failed to process salary (concurrent)', {
+              employeeId: employee.employeeId,
+              error: (batchResult.reason as Error).message,
+            });
+          }
+        }
+
+        await reportProgress();
+      }
+
+      // Pause between batches
+      if (batchDelay > 0 && i + batchSize < employees.length) {
+        await new Promise((resolve) => setTimeout(resolve, batchDelay));
       }
     }
 
@@ -1041,6 +1208,171 @@ export class Payroll<
       total: results.total,
       successful: results.successful.length,
       failed: results.failed.length,
+      concurrency,
+      batchSize,
+    });
+
+    return results;
+  }
+
+  /**
+   * Stream-based bulk payroll processing for millions of employees.
+   * Uses MongoDB cursors to avoid loading everything into memory.
+   *
+   * @private
+   */
+  private async processBulkPayrollStreaming(params: {
+    query: Record<string, unknown>;
+    month: number;
+    year: number;
+    paymentDate: Date;
+    paymentMethod?: string;
+    options?: any;
+    context?: any;
+    signal?: AbortSignal;
+    batchSize: number;
+    batchDelay: number;
+    concurrency: number;
+    onProgress?: (progress: BulkPayrollProgress) => void | Promise<void>;
+    total: number;
+  }): Promise<BulkPayrollResult> {
+    const {
+      query,
+      month,
+      year,
+      paymentDate,
+      paymentMethod,
+      options,
+      context,
+      signal,
+      batchSize,
+      batchDelay,
+      concurrency,
+      onProgress,
+      total,
+    } = params;
+
+    const startTime = Date.now();
+    const results: BulkPayrollResult = {
+      successful: [],
+      failed: [],
+      total,
+    };
+
+    // Create cursor (streams employees one at a time)
+    const cursor = this.models.EmployeeModel.find(query).cursor();
+
+    let processed = 0;
+    let batchCount = 0;
+    const batchPromises: Array<Promise<void>> = [];
+
+    // Import p-limit for concurrency control
+    const { default: pLimit } = await import('p-limit');
+    const limit = pLimit(concurrency);
+
+    // Progress reporting helper
+    const reportProgress = async (currentEmployee?: string) => {
+      if (onProgress) {
+        await onProgress({
+          processed,
+          total,
+          successful: results.successful.length,
+          failed: results.failed.length,
+          currentEmployee,
+          percentage: total > 0 ? Math.round((processed / total) * 100) : 0,
+        });
+      }
+    };
+
+    // Stream employees
+    for await (const employee of cursor) {
+      // Check cancellation
+      if (signal?.aborted) {
+        cursor.close();
+        getLogger().warn('Streaming bulk payroll cancelled', {
+          processed,
+          total,
+        });
+        throw new Error('Payroll processing cancelled by user');
+      }
+
+      // Add to worker pool
+      const promise = limit(async () => {
+        try {
+          const result = await this.processSalary({
+            employeeId: employee._id,
+            month,
+            year,
+            paymentDate,
+            paymentMethod: paymentMethod as PaymentMethod | undefined,
+            options,
+            context: { ...context, session: undefined },
+          });
+
+          results.successful.push({
+            employeeId: employee.employeeId,
+            amount: result.payrollRecord.breakdown.netSalary,
+            transactionId: result.transaction._id,
+          });
+        } catch (error) {
+          results.failed.push({
+            employeeId: employee.employeeId,
+            error: (error as Error).message,
+          });
+
+          getLogger().error('Failed to process salary (streaming)', {
+            employeeId: employee.employeeId,
+            error: (error as Error).message,
+          });
+        }
+      });
+
+      batchPromises.push(promise);
+      processed++;
+
+      // Batch completion
+      if (processed % batchSize === 0) {
+        await Promise.all(batchPromises);
+        batchPromises.length = 0;
+        batchCount++;
+
+        await reportProgress();
+
+        // Batch delay
+        if (batchDelay > 0 && processed < total) {
+          await new Promise((resolve) => setTimeout(resolve, batchDelay));
+        }
+      }
+    }
+
+    // Wait for final batch
+    if (batchPromises.length > 0) {
+      await Promise.all(batchPromises);
+      await reportProgress();
+    }
+
+    // Emit completion event
+    this._events.emitSync('payroll:completed', {
+      organizationId: toObjectId(query.organizationId as ObjectIdLike),
+      period: { month, year },
+      summary: {
+        total: results.total,
+        successful: results.successful.length,
+        failed: results.failed.length,
+        totalAmount: results.successful.reduce((sum, r) => sum + r.amount, 0),
+      },
+      context,
+    });
+
+    const duration = Date.now() - startTime;
+
+    getLogger().info('Streaming bulk payroll completed', {
+      total: results.total,
+      successful: results.successful.length,
+      failed: results.failed.length,
+      duration,
+      concurrency,
+      batchSize,
     });
 
     return results;
@@ -1169,7 +1501,8 @@ export class Payroll<
     session?: ClientSession
   ): Promise<import('./types.js').PayrollBreakdown> {
     const comp = employee.compensation;
-    let baseAmount = comp.baseAmount;
+    const originalBaseAmount = comp.baseAmount;
+    let baseAmount = originalBaseAmount;
 
     const options = input.options || {};
 
@@ -1206,33 +1539,54 @@ export class Payroll<
       baseAmount = Math.round(baseAmount * proRating.ratio);
     }
 
-    // Filter allowances by effective date
+    // Filter allowances by effective date (include both recurring and one-time)
     const effectiveAllowances = (comp.allowances || [])
-      .filter((a) => isEffectiveForPeriod(a, period.startDate, period.endDate))
-      .filter((a) => a.recurring !== false);
+      .filter((a) => isEffectiveForPeriod(a, period.startDate, period.endDate));
 
     // Filter deductions by effective date
     const effectiveDeductions = (comp.deductions || [])
       .filter((d) => isEffectiveForPeriod(d, period.startDate, period.endDate))
       .filter((d) => d.auto || d.recurring);
 
-    // Apply pro-rating to allowances if needed
-    const allowances = effectiveAllowances.map((a) => ({
-      type: a.type,
-      amount: proRating.isProRated && this.config.payroll.allowProRating
-        ? Math.round(a.amount * proRating.ratio)
-        : a.amount,
-      taxable: a.taxable ?? true,
-    }));
+    // Calculate actual amounts for allowances (handle percentage-based)
+    // Use ORIGINAL base for percentage calculations to avoid double pro-rating
+    const allowances = effectiveAllowances.map((a) => {
+      // Calculate from original base (percentage) or use fixed amount
+      let amount = a.isPercentage && a.value !== undefined
+        ? Math.round((originalBaseAmount * a.value) / 100)
+        : a.amount;
 
-    // Apply pro-rating to deductions if needed
-    const deductions = effectiveDeductions.map((d) => ({
-      type: d.type,
-      amount: proRating.isProRated && this.config.payroll.allowProRating
-        ? Math.round(d.amount * proRating.ratio)
-        : d.amount,
-      description: d.description,
-    }));
+      // Apply pro-rating ONCE if needed
+      if (proRating.isProRated && this.config.payroll.allowProRating) {
+        amount = Math.round(amount * proRating.ratio);
+      }
+
+      return {
+        type: a.type,
+        amount,
+        taxable: a.taxable ?? true,
+      };
+    });
+
+    // Calculate actual amounts for deductions (handle percentage-based)
+    // Use ORIGINAL base for percentage calculations to avoid double pro-rating
+    const deductions = effectiveDeductions.map((d) => {
+      // Calculate from original base (percentage) or use fixed amount
+      let amount = d.isPercentage && d.value !== undefined
+        ? Math.round((originalBaseAmount * d.value) / 100)
+        : d.amount;
+
+      // Apply pro-rating ONCE if needed
+      if (proRating.isProRated && this.config.payroll.allowProRating) {
+        amount = Math.round(amount * proRating.ratio);
+      }
+
+      return {
+        type: d.type,
+        amount,
+        description: d.description,
+      };
+    });
 
     // Attendance deduction calculation (uses working days, not calendar days)
     let attendanceDeduction = 0;
@@ -1278,8 +1632,8 @@ export class Payroll<
     let taxAmount = 0;
     const currency = comp.currency || this.config.payroll.defaultCurrency;
     const taxBrackets = TAX_BRACKETS[currency] || [];
-    
-    if (taxBrackets.length > 0 && this.config.payroll.autoDeductions) {
+
+    if (!options.skipTax && taxBrackets.length > 0 && this.config.payroll.autoDeductions) {
       // Annualize the taxable amount for tax bracket calculation
       const annualTaxable = taxableAmount * 12;
       const annualTax = applyTaxBrackets(annualTaxable, taxBrackets);

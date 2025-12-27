@@ -79,25 +79,25 @@ When `AttendanceModel` is provided and `attendanceIntegration` is enabled:
 
 1. **Fetches attendance record** for the employee's pay period
 2. **Reads `totalWorkDays`** from the attendance document
-3. **Calculates absent days**: `totalDays - totalWorkDays`
+3. **Calculates absent days**: `expectedWorkingDays - totalWorkDays`
 4. **Applies deduction**: `absentDays × dailyRate`
 
 ### Example
 
 ```typescript
 // Employee with monthly salary of 50,000
-// Pay period: March 2025 (31 days)
-// Attendance record shows: totalWorkDays = 28.5 (28 full + 1 half day)
+// Pay period: March 2025 (expected working days: 22)
+// Attendance record shows: totalWorkDays = 18.5 (18 full + 1 half day)
 
 // Automatic calculation:
-const absentDays = 31 - 28.5;     // 2.5 days
-const dailyRate = 50000 / 31;     // ~1,612.90
-const deduction = 2.5 * 1612.90;  // ~4,032.25
+const absentDays = 22 - 18.5;     // 3.5 days
+const dailyRate = 50000 / 22;     // ~2,272.73
+const deduction = 3.5 * 2272.73;  // ~7,954.55
 
 // Final payroll breakdown:
 // Base: 50,000
-// Attendance Deduction: -4,032.25
-// Net: 45,967.75
+// Attendance Deduction: -7,954.55
+// Net: 42,045.45
 ```
 
 ---
@@ -158,6 +158,8 @@ customAttendanceSchema.index(
 
 export const CustomAttendance = mongoose.model('CustomAttendance', customAttendanceSchema);
 ```
+
+**Note:** `expectedWorkingDays` comes from payroll's work schedule + holidays. When you pass manual attendance into `processSalary`, ensure `expectedDays` is the working‑days count (not calendar days).
 
 ---
 

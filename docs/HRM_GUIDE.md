@@ -319,6 +319,23 @@ try {
 }
 ```
 
+### Processing Options
+
+```typescript
+await payroll.processSalary({
+  employeeId,
+  month,
+  year,
+  options: {
+    holidays: [new Date('2024-12-25')],
+    workSchedule: { workDays: [1, 2, 3, 4, 5], hoursPerDay: 8 },
+    skipTax: true,
+    skipAttendance: true,
+    skipProration: true,
+  },
+});
+```
+
 ### Events
 
 ```typescript

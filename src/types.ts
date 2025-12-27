@@ -654,8 +654,12 @@ export interface AddAllowanceParams {
   employeeId: ObjectIdLike;
   /** Allowance type */
   type: AllowanceType;
-  /** Amount */
+  /** Amount (fixed or ignored if isPercentage is true) */
   amount: number;
+  /** Whether amount is percentage of base salary */
+  isPercentage?: boolean;
+  /** Percentage value if isPercentage is true */
+  value?: number;
   /** Is taxable */
   taxable?: boolean;
   /** Is recurring */
@@ -684,8 +688,12 @@ export interface AddDeductionParams {
   employeeId: ObjectIdLike;
   /** Deduction type */
   type: DeductionType;
-  /** Amount */
+  /** Amount (fixed or ignored if isPercentage is true) */
   amount: number;
+  /** Whether amount is percentage of base salary */
+  isPercentage?: boolean;
+  /** Percentage value if isPercentage is true */
+  value?: number;
   /** Auto-deduct from salary */
   auto?: boolean;
   /** Is recurring */
@@ -746,6 +754,22 @@ export interface ProcessSalaryParams {
   context?: OperationContext;
 }
 
+/** Bulk payroll progress information */
+export interface BulkPayrollProgress {
+  /** Number of employees processed so far */
+  processed: number;
+  /** Total number of employees to process */
+  total: number;
+  /** Number of successful processings */
+  successful: number;
+  /** Number of failed processings */
+  failed: number;
+  /** Currently processing employee ID (optional) */
+  currentEmployee?: string;
+  /** Completion percentage (0-100) */
+  percentage?: number;
+}
+
 /** Process bulk payroll parameters */
 export interface ProcessBulkPayrollParams {
   /** Organization ID */
@@ -767,6 +791,47 @@ export interface ProcessBulkPayrollParams {
   options?: PayrollProcessingOptions;
   /** Operation context */
   context?: OperationContext;
+  /**
+   * Progress callback - called after each employee is processed
+   * Useful for updating job queue progress, UI updates, etc.
+   * @example
+   * onProgress: async (progress) => {
+   *   await Job.findByIdAndUpdate(jobId, { progress });
+   * }
+   */
+  onProgress?: (progress: BulkPayrollProgress) => void | Promise<void>;
+  /**
+   * Cancellation signal - check signal.aborted to allow graceful cancellation
+   * @example
+   * const controller = new AbortController();
+   * processBulkPayroll({ ..., signal: controller.signal });
+   * // Later: controller.abort();
+   */
+  signal?: AbortSignal;
+  /**
+   * Batch size - number of employees to process before pausing (default: 10)
+   * Helps prevent resource exhaustion and allows event loop to process other tasks
+   */
+  batchSize?: number;
+  /**
+   * Batch delay in milliseconds - pause between batches (default: 0)
+   * Useful for rate limiting or preventing database connection pool exhaustion
+   */
+  batchDelay?: number;
+  /**
+   * Concurrency - number of employees to process in parallel (default: 1)
+   * - 1: Sequential processing (safest, default)
+   * - 2-5: Moderate parallelism (faster, uses more resources)
+   * - 10+: High parallelism (fastest, requires robust infrastructure)
+   */
+  concurrency?: number;
+  /**
+   * Use cursor-based streaming for processing (default: auto)
+   * - false: Load all into memory (fast for <10k employees)
+   * - true: Stream via cursor (scales to millions, constant memory)
+   * - undefined/auto: Automatically use streaming for >10k employees
+   */
+  useStreaming?: boolean;
 }
 
 /** Payroll history parameters */

@@ -272,6 +272,7 @@ export const payrollRecordFields: SchemaDefinition = {
     enum: PAYROLL_STATUS_VALUES,
     default: 'pending',
   },
+  processedAt: { type: Date },
   paidAt: { type: Date },
   paymentMethod: { type: String },
   processedBy: { type: Schema.Types.ObjectId, ref: 'User' },

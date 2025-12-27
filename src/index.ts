@@ -111,6 +111,7 @@ export type {
   // Result types
   ProcessSalaryResult,
   BulkPayrollResult,
+  BulkPayrollProgress,
   PayrollSummaryResult,
   TaxCalculationResult,
   CompensationBreakdownResult,
