@@ -164,6 +164,24 @@ export type OrgRole =
   | 'intern'
   | 'consultant';
 
+/** Leave type */
+export type LeaveType =
+  | 'annual'
+  | 'sick'
+  | 'unpaid'
+  | 'maternity'
+  | 'paternity'
+  | 'bereavement'
+  | 'compensatory'
+  | 'other';
+
+/** Leave request status */
+export type LeaveRequestStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'cancelled';
+
 // ============================================================================
 // Configuration Types
 // ============================================================================
@@ -1100,4 +1118,129 @@ export type WithPayroll<TEmployee> = TEmployee & {
   payrollStats: PayrollStats;
   employmentHistory: EmploymentHistoryEntry[];
 };
+
+// ============================================================================
+// Leave Management Types
+// ============================================================================
+
+/** Leave balance entry (embedded in Employee) */
+export interface LeaveBalance {
+  /** Leave type */
+  type: LeaveType;
+  /** Allocated days for the year */
+  allocated: number;
+  /** Used days */
+  used: number;
+  /** Pending days (requested but not yet approved) */
+  pending: number;
+  /** Days carried over from previous year */
+  carriedOver: number;
+  /** When carried-over days expire */
+  expiresAt?: Date | null;
+  /** Year this balance applies to */
+  year: number;
+}
+
+/** Leave request document */
+export interface LeaveRequestDocument extends Document {
+  _id: ObjectId;
+  organizationId?: ObjectId; // Optional for single-tenant mode
+  employeeId: ObjectId;
+  userId: ObjectId;
+  type: LeaveType;
+  startDate: Date;
+  endDate: Date;
+  days: number;
+  halfDay?: boolean;
+  reason?: string;
+  status: LeaveRequestStatus;
+  reviewedBy?: ObjectId | null;
+  reviewedAt?: Date | null;
+  reviewNotes?: string;
+  attachments?: string[];
+  metadata?: Record<string, unknown>;
+  createdAt?: Date;
+  updatedAt?: Date;
+  save(options?: { session?: ClientSession }): Promise<this>;
+  toObject(): Record<string, unknown>;
+}
+
+/** Request leave input */
+export interface RequestLeaveInput {
+  type: LeaveType;
+  startDate: Date;
+  endDate: Date;
+  halfDay?: boolean;
+  reason?: string;
+  attachments?: string[];
+}
+
+/** Review leave request input */
+export interface ReviewLeaveRequestInput {
+  requestId: ObjectIdLike;
+  action: 'approve' | 'reject';
+  notes?: string;
+}
+
+/** Leave history filters */
+export interface LeaveHistoryFilters {
+  type?: LeaveType;
+  status?: LeaveRequestStatus;
+  startDate?: Date;
+  endDate?: Date;
+  year?: number;
+}
+
+/** Accrue leave options */
+export interface AccrueLeaveOptions {
+  type?: LeaveType;
+  amount?: number;
+  proRate?: boolean;
+  asOfDate?: Date;
+}
+
+/** Reset annual leave options */
+export interface ResetAnnualLeaveOptions {
+  year?: number;
+  carryOverLimit?: number;
+  leaveTypes?: LeaveType[];
+}
+
+/** Leave summary result */
+export interface LeaveSummaryResult {
+  year: number;
+  balances: LeaveBalance[];
+  totalAllocated: number;
+  totalUsed: number;
+  totalPending: number;
+  totalAvailable: number;
+  byType: Record<LeaveType, {
+    allocated: number;
+    used: number;
+    pending: number;
+    available: number;
+  }>;
+}
+
+/** Leave initialization config */
+export interface LeaveInitConfig {
+  /** Default leave allocations by type */
+  defaultAllocations?: Partial<Record<LeaveType, number>>;
+  /** Whether to pro-rate for mid-year hires */
+  proRateNewHires?: boolean;
+  /** Fiscal year start month (1-12, default: 1 for January) */
+  fiscalYearStartMonth?: number;
+  /** Maximum carry-over days by type */
+  maxCarryOver?: Partial<Record<LeaveType, number>>;
+}
+
+/** Working days calculation options */
+export interface WorkingDaysOptions {
+  /** Working days of week (0=Sunday, 6=Saturday). Default: [1,2,3,4,5] */
+  workDays?: number[];
+  /** Holiday dates to exclude */
+  holidays?: Date[];
+  /** Include end date in calculation (default: true) */
+  includeEndDate?: boolean;
+}
 

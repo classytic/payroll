@@ -254,17 +254,14 @@ export const payrollRecordFields: SchemaDefinition = {
     type: Schema.Types.ObjectId,
     ref: 'Organization',
     required: true,
-    index: true,
   },
   employeeId: {
     type: Schema.Types.ObjectId,
     required: true,
-    index: true,
   },
   userId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
-    index: true,
     required: true,
   },
   period: { type: periodSchema, required: true },
@@ -274,7 +271,6 @@ export const payrollRecordFields: SchemaDefinition = {
     type: String,
     enum: PAYROLL_STATUS_VALUES,
     default: 'pending',
-    index: true,
   },
   paidAt: { type: Date },
   paymentMethod: { type: String },
@@ -420,6 +416,20 @@ export function createPayrollRecordSchema(
   return schema;
 }
 
+
+// ============================================================================
+// Leave Schemas
+// ============================================================================
+
+export {
+  leaveBalanceSchema,
+  leaveBalanceFields,
+  leaveRequestFields,
+  leaveRequestIndexes,
+  leaveRequestTTLIndex,
+  applyLeaveRequestIndexes,
+  createLeaveRequestSchema,
+} from './leave.js';
 
 // ============================================================================
 // Default Export

@@ -66,19 +66,16 @@ const payrollRecordSchema = new Schema(
       type: Schema.Types.ObjectId,
       required: true,
       ref: 'Organization',
-      index: true,
     },
     employeeId: {
       type: Schema.Types.ObjectId,
       required: true,
       ref: 'Employee',
-      index: true,
     },
     userId: {
       type: Schema.Types.ObjectId,
       required: true,
       ref: 'User',
-      index: true,
     },
     period: {
       type: periodSchema,
@@ -92,7 +89,6 @@ const payrollRecordSchema = new Schema(
       type: String,
       enum: Object.values(PAYROLL_STATUS),
       default: PAYROLL_STATUS.PENDING,
-      index: true,
     },
     paymentMethod: {
       type: String,

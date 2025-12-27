@@ -162,3 +162,25 @@ export {
   default as queryBuilders,
 } from './query-builders.js';
 
+// ============================================================================
+// Leave Utilities
+// ============================================================================
+
+export {
+  DEFAULT_LEAVE_ALLOCATIONS,
+  DEFAULT_CARRY_OVER,
+  calculateLeaveDays,
+  hasLeaveBalance,
+  getLeaveBalance,
+  getLeaveBalances,
+  getAvailableDays,
+  getLeaveSummary,
+  initializeLeaveBalances,
+  proRateAllocation,
+  calculateUnpaidLeaveDeduction,
+  getUnpaidLeaveDays,
+  calculateCarryOver,
+  accrueLeaveToBalance,
+  default as leaveUtils,
+} from './leave.js';
+

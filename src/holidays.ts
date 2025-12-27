@@ -36,7 +36,7 @@ export function createHolidaySchema(options: {
   singleTenant?: boolean;
 } = {}): Schema {
   const fields: any = {
-    date: { type: Date, required: true, index: true },
+    date: { type: Date, required: true },
     name: { type: String, required: true },
     type: { 
       type: String, 
@@ -51,7 +51,6 @@ export function createHolidaySchema(options: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
       required: true,
-      index: true,
     };
   }
 

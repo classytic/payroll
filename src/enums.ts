@@ -272,6 +272,58 @@ export function isValidOrgRole(value: string): value is OrgRole {
 }
 
 // ============================================================================
+// Leave Type
+// ============================================================================
+
+import type { LeaveType, LeaveRequestStatus } from './types.js';
+
+export const LEAVE_TYPE = {
+  ANNUAL: 'annual',
+  SICK: 'sick',
+  UNPAID: 'unpaid',
+  MATERNITY: 'maternity',
+  PATERNITY: 'paternity',
+  BEREAVEMENT: 'bereavement',
+  COMPENSATORY: 'compensatory',
+  OTHER: 'other',
+} as const satisfies Record<string, LeaveType>;
+
+export const LEAVE_TYPE_VALUES = Object.values(LEAVE_TYPE);
+
+export function isValidLeaveType(value: string): value is LeaveType {
+  return LEAVE_TYPE_VALUES.includes(value as LeaveType);
+}
+
+export function isPaidLeaveType(type: LeaveType): boolean {
+  return type !== LEAVE_TYPE.UNPAID;
+}
+
+// ============================================================================
+// Leave Request Status
+// ============================================================================
+
+export const LEAVE_REQUEST_STATUS = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+} as const satisfies Record<string, LeaveRequestStatus>;
+
+export const LEAVE_REQUEST_STATUS_VALUES = Object.values(LEAVE_REQUEST_STATUS);
+
+export function isValidLeaveRequestStatus(value: string): value is LeaveRequestStatus {
+  return LEAVE_REQUEST_STATUS_VALUES.includes(value as LeaveRequestStatus);
+}
+
+export function isPendingLeaveStatus(status: LeaveRequestStatus): boolean {
+  return status === LEAVE_REQUEST_STATUS.PENDING;
+}
+
+export function isApprovedLeaveStatus(status: LeaveRequestStatus): boolean {
+  return status === LEAVE_REQUEST_STATUS.APPROVED;
+}
+
+// ============================================================================
 // Default Export
 // ============================================================================
 
@@ -300,5 +352,9 @@ export default {
   SALARY_BAND_VALUES,
   ORG_ROLE,
   ORG_ROLE_VALUES,
+  LEAVE_TYPE,
+  LEAVE_TYPE_VALUES,
+  LEAVE_REQUEST_STATUS,
+  LEAVE_REQUEST_STATUS_VALUES,
 };
 

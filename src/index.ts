@@ -75,6 +75,20 @@ export type {
   HRMTransactionCategory,
   SalaryBand,
   OrgRole,
+  LeaveType,
+  LeaveRequestStatus,
+
+  // Leave types
+  LeaveBalance,
+  LeaveRequestDocument,
+  RequestLeaveInput,
+  ReviewLeaveRequestInput,
+  LeaveHistoryFilters,
+  LeaveInitConfig,
+  LeaveSummaryResult,
+  WorkingDaysOptions,
+  AccrueLeaveOptions,
+  ResetAnnualLeaveOptions,
 
   // Operation parameter types
   HireEmployeeParams,
@@ -140,6 +154,13 @@ export {
   PAYROLL_STATUS,
   TERMINATION_REASON,
   HRM_TRANSACTION_CATEGORIES,
+  LEAVE_TYPE,
+  LEAVE_REQUEST_STATUS,
+  isValidLeaveType,
+  isPaidLeaveType,
+  isValidLeaveRequestStatus,
+  isPendingLeaveStatus,
+  isApprovedLeaveStatus,
 } from './enums.js';
 
 // ============================================================================
@@ -170,6 +191,13 @@ export {
   applyPayrollRecordIndexes,
   createEmployeeSchema,
   createPayrollRecordSchema,
+  // Leave schemas
+  leaveBalanceSchema,
+  leaveBalanceFields,
+  leaveRequestFields,
+  leaveRequestIndexes,
+  applyLeaveRequestIndexes,
+  createLeaveRequestSchema,
 } from './schemas/index.js';
 
 // ============================================================================
@@ -220,3 +248,42 @@ export {
   type Holiday,
 } from './holidays.js';
 
+// ============================================================================
+// Leave Management
+// ============================================================================
+
+export {
+  leaveRequestSchema,
+  getLeaveRequestModel,
+  type LeaveRequestModel,
+} from './models/index.js';
+
+export {
+  DEFAULT_LEAVE_ALLOCATIONS,
+  DEFAULT_CARRY_OVER,
+  calculateLeaveDays,
+  hasLeaveBalance,
+  getLeaveBalance,
+  getLeaveBalances,
+  getAvailableDays,
+  getLeaveSummary,
+  initializeLeaveBalances,
+  proRateAllocation,
+  calculateUnpaidLeaveDeduction,
+  getUnpaidLeaveDays,
+  calculateCarryOver,
+  accrueLeaveToBalance,
+} from './utils/index.js';
+
+export {
+  LeaveService,
+  createLeaveService,
+  type LeaveServiceConfig,
+  type RequestLeaveParams,
+  type ReviewLeaveParams,
+  type CancelLeaveParams,
+  type LeaveForPayrollParams,
+  type LeaveRequestResult,
+  type ReviewResult,
+  type OverlapCheckResult,
+} from './services/index.js';
