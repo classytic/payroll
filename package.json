@@ -1,6 +1,6 @@
 {
   "name": "@classytic/payroll",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Modern HRM and payroll management for Mongoose - Plugin-based, event-driven, multi-tenant ready. Salary processing, compensation management, tax calculations, and employee lifecycle management.",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,6 +25,14 @@
     "./utils": {
       "types": "./dist/utils/index.d.ts",
       "default": "./dist/utils/index.js"
+    },
+    "./shift-compliance": {
+      "types": "./dist/shift-compliance/index.d.ts",
+      "default": "./dist/shift-compliance/index.js"
+    },
+    "./jurisdiction": {
+      "types": "./dist/jurisdiction/index.d.ts",
+      "default": "./dist/jurisdiction/index.js"
     }
   },
   "files": [

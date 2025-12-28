@@ -8,11 +8,9 @@ import { describe, it, expect } from 'vitest';
 import {
   countWorkingDays,
   calculateProration,
-  calculateTax,
   calculateAttendanceDeduction,
   calculateSalaryBreakdown,
   getPayPeriod,
-  COUNTRY_DEFAULTS,
   DEFAULT_WORK_SCHEDULE,
 } from '../src/core/index.js';
 
@@ -167,46 +165,8 @@ describe('calculateProration', () => {
 // calculateTax Tests
 // ============================================================================
 
-describe('calculateTax', () => {
-  describe('USD', () => {
-    it('should calculate tax for income in brackets', () => {
-      const result = calculateTax(5000, 'USD');
-      
-      expect(result.amount).toBeGreaterThan(0);
-      expect(result.effectiveRate).toBeGreaterThan(0);
-    });
-
-    it('should calculate higher tax for higher income', () => {
-      const low = calculateTax(3000, 'USD');
-      const high = calculateTax(10000, 'USD');
-      
-      expect(high.amount).toBeGreaterThan(low.amount);
-    });
-  });
-
-  describe('BDT', () => {
-    it('should calculate less tax for lower income in BDT', () => {
-      const low = calculateTax(20000, 'BDT');
-      const high = calculateTax(50000, 'BDT');
-      // Higher income should result in higher tax
-      expect(high.amount).toBeGreaterThan(low.amount);
-    });
-
-    it('should calculate tax for income in BDT', () => {
-      const result = calculateTax(50000, 'BDT');
-      // 50000 * 12 = 600000 BDT/year
-      expect(result.amount).toBeGreaterThan(0);
-    });
-  });
-
-  describe('Unknown currency', () => {
-    it('should use default (USD) brackets for unknown currency', () => {
-      const result = calculateTax(5000, 'XYZ');
-      // Falls back to USD brackets
-      expect(result.amount).toBeGreaterThan(0);
-    });
-  });
-});
+// Legacy calculateTax tests removed - use jurisdiction system instead
+// See tests/jurisdiction.test.ts for tax calculation tests
 
 // ============================================================================
 // calculateAttendanceDeduction Tests
@@ -240,7 +200,6 @@ describe('calculateAttendanceDeduction', () => {
 describe('calculateSalaryBreakdown', () => {
   const baseParams = {
     baseSalary: 100000,
-    currency: 'USD',
     hireDate: new Date('2024-01-01'),
     periodStart: new Date('2024-03-01'),
     periodEnd: new Date('2024-03-31'),
@@ -343,6 +302,42 @@ describe('calculateSalaryBreakdown', () => {
     // Tax should be lower when allowance is not taxable
     expect(nonTaxable.taxAmount).toBeLessThan(taxable.taxAmount);
   });
+
+  it('should include attendance deduction in totalDeductions', () => {
+    const result = calculateSalaryBreakdown({
+      ...baseParams,
+      attendance: { expectedDays: 22, actualDays: 20 }, // 2 days absent
+      deductions: [{ type: 'provident_fund', amount: 5000 }],
+    });
+
+    // totalDeductions should include both provident fund AND attendance
+    // NOT just provident fund
+    expect(result.attendanceDeduction).toBeGreaterThan(0);
+    expect(result.totalDeductions).toBe(
+      5000 + result.attendanceDeduction
+    );
+  });
+
+  it('should exclude only tax from totalDeductions (not attendance)', () => {
+    const result = calculateSalaryBreakdown({
+      ...baseParams,
+      attendance: { expectedDays: 22, actualDays: 18 }, // 4 days absent
+      deductions: [
+        { type: 'provident_fund', amount: 3000 },
+        { type: 'insurance', amount: 2000 },
+      ],
+    });
+
+    // totalDeductions = provident_fund + insurance + attendance
+    // totalDeductions excludes ONLY tax, not attendance
+    const expectedTotal = 3000 + 2000 + result.attendanceDeduction;
+    expect(result.totalDeductions).toBe(expectedTotal);
+
+    // Verify attendance is NOT counted separately in netSalary
+    expect(result.netSalary).toBe(
+      result.grossSalary - result.totalDeductions - result.taxAmount
+    );
+  });
 });
 
 // ============================================================================
@@ -372,25 +367,7 @@ describe('getPayPeriod', () => {
 });
 
 // ============================================================================
-// Country Defaults Tests
-// ============================================================================
-
-describe('COUNTRY_DEFAULTS', () => {
-  it('should have US defaults', () => {
-    expect(COUNTRY_DEFAULTS.US.currency).toBe('USD');
-    expect(COUNTRY_DEFAULTS.US.workDays).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it('should have BD defaults with Sun-Thu', () => {
-    expect(COUNTRY_DEFAULTS.BD.currency).toBe('BDT');
-    expect(COUNTRY_DEFAULTS.BD.workDays).toEqual([0, 1, 2, 3, 4]);
-  });
-
-  it('should have IN defaults with Mon-Sat', () => {
-    expect(COUNTRY_DEFAULTS.IN.currency).toBe('INR');
-    expect(COUNTRY_DEFAULTS.IN.workDays).toEqual([1, 2, 3, 4, 5, 6]);
-  });
-});
+// Country defaults removed - use jurisdiction system instead
 
 // ============================================================================
 // DEFAULT_WORK_SCHEDULE Tests

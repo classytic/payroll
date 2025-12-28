@@ -105,69 +105,27 @@ export interface SalaryCalculationResult {
 }
 
 // ============================================================================
-// Country Defaults
-// ============================================================================
-
-export const COUNTRY_DEFAULTS: Record<string, {
-  currency: string;
-  workDays: number[];
-  taxBrackets: Array<{ min: number; max: number; rate: number }>;
-}> = {
-  US: {
-    currency: 'USD',
-    workDays: [1, 2, 3, 4, 5], // Mon-Fri
-    taxBrackets: [
-      { min: 0, max: 11000, rate: 0.10 },
-      { min: 11000, max: 44725, rate: 0.12 },
-      { min: 44725, max: 95375, rate: 0.22 },
-      { min: 95375, max: 182100, rate: 0.24 },
-      { min: 182100, max: Infinity, rate: 0.32 },
-    ],
-  },
-  BD: {
-    currency: 'BDT',
-    workDays: [0, 1, 2, 3, 4], // Sun-Thu
-    taxBrackets: [
-      { min: 0, max: 350000, rate: 0 },
-      { min: 350000, max: 450000, rate: 0.05 },
-      { min: 450000, max: 750000, rate: 0.10 },
-      { min: 750000, max: 1150000, rate: 0.15 },
-      { min: 1150000, max: Infinity, rate: 0.20 },
-    ],
-  },
-  UK: {
-    currency: 'GBP',
-    workDays: [1, 2, 3, 4, 5],
-    taxBrackets: [
-      { min: 0, max: 12570, rate: 0 },
-      { min: 12570, max: 50270, rate: 0.20 },
-      { min: 50270, max: 125140, rate: 0.40 },
-      { min: 125140, max: Infinity, rate: 0.45 },
-    ],
-  },
-  IN: {
-    currency: 'INR',
-    workDays: [1, 2, 3, 4, 5, 6], // Mon-Sat
-    taxBrackets: [
-      { min: 0, max: 300000, rate: 0 },
-      { min: 300000, max: 600000, rate: 0.05 },
-      { min: 600000, max: 900000, rate: 0.10 },
-      { min: 900000, max: 1200000, rate: 0.15 },
-      { min: 1200000, max: Infinity, rate: 0.20 },
-    ],
-  },
-};
-
-// ============================================================================
 // Default Configuration
 // ============================================================================
+
+/**
+ * Default tax brackets (US federal example)
+ * For multi-jurisdiction support, use the jurisdiction system instead
+ */
+export const DEFAULT_TAX_BRACKETS: Array<{ min: number; max: number; rate: number }> = [
+  { min: 0, max: 10000, rate: 0.10 },
+  { min: 10000, max: 40000, rate: 0.12 },
+  { min: 40000, max: 85000, rate: 0.22 },
+  { min: 85000, max: 165000, rate: 0.24 },
+  { min: 165000, max: 215000, rate: 0.32 },
+  { min: 215000, max: 540000, rate: 0.35 },
+  { min: 540000, max: Infinity, rate: 0.37 },
+];
 
 export const DEFAULT_WORK_SCHEDULE: WorkSchedule = {
   workDays: [1, 2, 3, 4, 5], // Monday to Friday
   hoursPerDay: 8,
 };
-
-export const DEFAULT_TAX_BRACKETS = COUNTRY_DEFAULTS.US.taxBrackets;
 
 // ============================================================================
 // Pure Calculation Functions
@@ -282,19 +240,14 @@ export function calculateProration(
 }
 
 /**
- * Calculate tax using brackets (annualized)
- *
- * @example
- * const tax = calculateTax(monthlyIncome, 'USD');
+ * Internal simple tax calculation
+ * For multi-jurisdiction tax, use the jurisdiction system
+ * @internal
  */
-export function calculateTax(
+function calculateSimpleTax(
   monthlyIncome: number,
-  currency: string,
-  customBrackets?: Array<{ min: number; max: number; rate: number }>
+  brackets: Array<{ min: number; max: number; rate: number }> = DEFAULT_TAX_BRACKETS
 ): TaxResult {
-  const brackets = customBrackets || COUNTRY_DEFAULTS[currency]?.taxBrackets || DEFAULT_TAX_BRACKETS;
-  
-  // Annualize for bracket calculation
   const annualIncome = monthlyIncome * 12;
   let annualTax = 0;
 
@@ -334,10 +287,12 @@ export function calculateAttendanceDeduction(
  * This is the main function for salary calculation.
  * Pass all data from YOUR app, get back complete breakdown.
  *
+ * Note: Uses simple tax calculation. For multi-jurisdiction tax,
+ * use the jurisdiction system instead.
+ *
  * @example
  * const result = calculateSalaryBreakdown({
  *   baseSalary: 100000,
- *   currency: 'USD',
  *   hireDate: employee.hireDate,
  *   terminationDate: employee.terminationDate,
  *   periodStart: new Date('2024-03-01'),
@@ -350,7 +305,6 @@ export function calculateAttendanceDeduction(
  */
 export function calculateSalaryBreakdown(params: {
   baseSalary: number;
-  currency: string;
   hireDate: Date;
   terminationDate?: Date | null;
   periodStart: Date;
@@ -362,7 +316,6 @@ export function calculateSalaryBreakdown(params: {
 }): SalaryCalculationResult {
   const {
     baseSalary,
-    currency,
     hireDate,
     terminationDate,
     periodStart,
@@ -419,14 +372,14 @@ export function calculateSalaryBreakdown(params: {
   // 7. Calculate gross salary
   const grossSalary = proratedBase + totalAllowances;
 
-  // 8. Calculate tax
+  // 8. Calculate tax (simple calculation - for multi-jurisdiction, use jurisdiction system)
   let taxAmount = 0;
   if (!options.skipTax) {
     const taxableAllowances = processedAllowances
       .filter(a => a.taxable)
       .reduce((sum, a) => sum + a.amount, 0);
     const taxableIncome = proratedBase + taxableAllowances;
-    const taxResult = calculateTax(taxableIncome, currency);
+    const taxResult = calculateSimpleTax(taxableIncome);
     taxAmount = taxResult.amount;
     if (taxAmount > 0) {
       processedDeductions.push({ type: 'tax', amount: taxAmount });
@@ -435,9 +388,9 @@ export function calculateSalaryBreakdown(params: {
 
   // 9. Calculate net salary
   const totalDeductions = processedDeductions
-    .filter(d => d.type !== 'tax' && d.type !== 'attendance')
+    .filter(d => d.type !== 'tax')  // Exclude only tax, include attendance
     .reduce((sum, d) => sum + d.amount, 0);
-  const netSalary = grossSalary - totalDeductions - attendanceDeduction - taxAmount;
+  const netSalary = grossSalary - totalDeductions - taxAmount;
 
   return {
     baseSalary,

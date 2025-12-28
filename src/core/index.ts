@@ -107,13 +107,11 @@ export {
   type AttendanceInput,
   type SalaryCalculationResult,
   // Constants
-  COUNTRY_DEFAULTS,
   DEFAULT_WORK_SCHEDULE,
   DEFAULT_TAX_BRACKETS,
   // Pure Calculation Functions
   countWorkingDays,
   calculateProration,
-  calculateTax,
   calculateAttendanceDeduction,
   calculateSalaryBreakdown,
   getPayPeriod,

@@ -13,6 +13,7 @@ Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 | **Employee Management** | Hire, terminate, re-hire, update employment | ✅ Production-ready |
 | **Compensation** | Base salary, allowances, deductions, bank details | ✅ Production-ready |
 | **Payroll Processing** | Monthly salary with automatic calculations | ✅ Production-ready |
+| **Shift Compliance** | Late penalties, overtime bonuses, progressive discipline | ✅ **NEW** Production-ready |
 | **Bulk Processing** | Concurrency, progress tracking, cancellation | ✅ Production-ready |
 | **Streaming Mode** | Cursor-based processing for millions (auto-detect) | ✅ Production-ready |
 | **Attendance Integration** | Native `@classytic/clockin` support for absences | ✅ Production-ready |
@@ -35,6 +36,20 @@ Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 - 🧪 **Pure functions** - Test without database, client-side previews
 - 🔒 **Transaction-safe** - Atomic operations, no partial writes
 - 📦 **Zero config** - Works immediately with smart defaults
+
+## Scope & Boundaries
+
+This package focuses on payroll and core HRM data/calculations. The following remain **app-level** because they are UI, workflow, or company-specific:
+
+- Recruiting/ATS
+- Onboarding checklists
+- Performance reviews
+- Training/LMS
+- Org charts
+- Asset tracking
+- Employee self-service UI
+
+Jurisdiction rules are also **app-provided**. Use the jurisdiction tools to register your verified data (see `https://github.com/classytic/payroll/tree/main/examples/jurisdiction-data/README.md`).
 
 ## Installation
 
@@ -937,6 +952,432 @@ const LeaveRequest = mongoose.model('LeaveRequest', leaveRequestSchema);
 - `{ organizationId: 1, status: 1, createdAt: -1 }` - Pending requests
 - `{ employeeId: 1, status: 1 }` - Single-tenant queries
 - `{ organizationId: 1, type: 1, status: 1 }` - Reports by type
+
+---
+
+## Shift Compliance
+
+**Modern shift-based attendance management with late penalties, overtime bonuses, and progressive discipline.**
+
+Calculate shift compliance adjustments based on attendance data:
+- **Late arrival penalties** (flat, per-minute, percentage, tiered)
+- **Early departure penalties** (same modes as late arrival)
+- **Overtime bonuses** (daily, weekly, monthly with weekend/night premiums)
+- **Grace periods** (0-60 minutes before penalties apply)
+- **Progressive discipline** (tiered penalties: 1st warning → escalating fines)
+- **Penalty caps** (maximum penalties per period)
+- **Weekend premiums** (Saturday 1.5x, Sunday 2.0x)
+- **Night shift differentials** (10pm-6am @ 1.3x)
+
+### Quick Start
+
+```typescript
+import {
+  calculateShiftCompliance,
+  createPolicyFromPreset,
+  AttendancePolicyBuilder,
+} from '@classytic/payroll';
+
+// Option 1: Use an industry preset
+const policy = createPolicyFromPreset('manufacturing', {
+  name: 'Factory Floor Policy',
+  organizationId: org._id,
+});
+
+// Option 2: Build a custom policy
+const customPolicy = AttendancePolicyBuilder.create()
+  .named('Tech Department Policy')
+  .description('Flexible policy for tech workers')
+  .lateArrival()
+    .enable()
+    .gracePeriod(15)  // 15 minutes grace
+    .tieredPenalty()  // Progressive discipline
+      .tier(1, 3).warning()  // 1st-3rd: warning only
+      .tier(4, 5).penalty(20)  // 4th-5th: $20
+      .tier(6).penalty(40)  // 6th+: $40
+    .end()
+    .maxPenalties(3, 'monthly')  // Cap at 3 penalties/month
+    .resetOccurrences('quarterly')  // Reset counter quarterly
+  .end()
+  .earlyDeparture()
+    .disable()  // Not tracked in office environments
+  .end()
+  .overtime()
+    .enable()
+    .mode('weekly')
+    .weeklyThreshold(40, 1.5)  // >40 hours = 1.5x pay
+  .end()
+  .build();
+
+// Calculate shift compliance
+const result = calculateShiftCompliance({
+  attendance: {
+    lateArrivals: 3,
+    totalLateMinutes: 45,
+    overtimeHours: 8,
+  },
+  policy,
+  dailyWage: 1500,
+  hourlyRate: 200,
+});
+
+console.log(result);
+// {
+//   latePenalty: { amount: 150, occurrences: 3, breakdown: [...] },
+//   earlyDeparturePenalty: { amount: 0, occurrences: 0, breakdown: [] },
+//   overtimeBonus: { amount: 800, hours: 8, breakdown: [...] },
+//   totalPenalties: 150,
+//   totalBonuses: 800,
+//   netAdjustment: 650,  // +800 - 150
+//   complianceScore: 70,  // 0-100
+//   occurrenceCount: 3,
+//   isAtRisk: false,
+//   policyName: 'Factory Floor Policy'
+// }
+```
+
+### Industry Presets
+
+Six industry-standard policies based on research from SAP, Workday, ADP, and Zoho:
+
+```typescript
+import {
+  DEFAULT_ATTENDANCE_POLICY,     // Moderate, office-friendly
+  MANUFACTURING_POLICY,           // Strict, zero tolerance
+  RETAIL_POLICY,                  // Flexible with weekend premiums
+  OFFICE_POLICY,                  // Very flexible, progressive discipline
+  HEALTHCARE_POLICY,              // Night shift differential, patient care
+  HOSPITALITY_POLICY,             // Percentage-based, night/weekend premiums
+} from '@classytic/payroll';
+```
+
+| Preset | Grace Period | Penalty Mode | Overtime Mode | Special Features |
+|--------|-------------|--------------|---------------|------------------|
+| **Default** | 10 min | Tiered (progressive) | Daily | Balanced for office work |
+| **Manufacturing** | 0 min | Flat ($100) | Daily + Weekly 2x | Clock rounding (down), strict |
+| **Retail** | 5 min | Flat ($25) | Weekly | Weekend premiums (Sat 1.5x, Sun 2x) |
+| **Office/Tech** | 15 min | Tiered (lenient) | Weekly | Early departure disabled |
+| **Healthcare** | 5 min | Flat ($50/$75) | Daily | Night shift 1.3x, weekend premiums |
+| **Hospitality** | 5 min | Percentage (1-1.5%) | Weekly | Night shift 1.2x, weekend premiums |
+
+### Penalty Modes
+
+#### 1. Flat Penalty (Fixed amount per occurrence)
+
+```typescript
+lateArrival()
+  .flatPenalty(50)  // $50 per late occurrence
+  .build()
+```
+
+#### 2. Per-Minute Penalty (Based on minutes late)
+
+```typescript
+lateArrival()
+  .perMinutePenalty(2)  // $2 per minute late
+  .build()
+```
+
+#### 3. Percentage Penalty (Percentage of daily wage)
+
+```typescript
+lateArrival()
+  .percentagePenalty(2)  // 2% of daily wage per occurrence
+  .build()
+```
+
+#### 4. Tiered Penalty (Progressive discipline)
+
+```typescript
+lateArrival()
+  .tieredPenalty()
+    .tier(1, 2).warning()      // 1st-2nd: warning only ($0)
+    .tier(3, 4).penalty(25)    // 3rd-4th: $25
+    .tier(5).penalty(50)       // 5th and above: $50
+  .end()
+  .build()
+```
+
+### Overtime Modes
+
+#### Daily Overtime (Per-day threshold)
+
+```typescript
+overtime()
+  .mode('daily')
+  .dailyThreshold(8, 1.5)  // >8 hours/day = 1.5x pay
+  .build()
+
+// Employee works 10 hours → 2 hours overtime @ 1.5x
+// Bonus = 2 * hourlyRate * 0.5  (only pay the extra 0.5x)
+```
+
+#### Weekly Overtime (Per-week threshold)
+
+```typescript
+overtime()
+  .mode('weekly')
+  .weeklyThreshold(40, 1.5)  // >40 hours/week = 1.5x pay
+  .weekendPremium(1.5, 2.0)  // Saturday 1.5x, Sunday 2.0x
+  .build()
+```
+
+#### Night Shift Differential
+
+```typescript
+overtime()
+  .nightShiftDifferential(22, 6, 1.3)  // 10pm-6am @ 1.3x (30% premium)
+  .build()
+
+// Employee works 8 hours night shift
+// Bonus = 8 * hourlyRate * 0.3  (the extra 30%)
+```
+
+### Working with Detailed Occurrences
+
+For detailed breakdowns and audit trails:
+
+```typescript
+import type {
+  LateOccurrence,
+  OvertimeOccurrence,
+} from '@classytic/payroll';
+
+const lateOccurrences: LateOccurrence[] = [
+  {
+    date: new Date('2025-01-15'),
+    scheduledTime: new Date('2025-01-15T09:00:00'),
+    actualTime: new Date('2025-01-15T09:15:00'),
+    minutesLate: 15,
+  },
+  {
+    date: new Date('2025-01-16'),
+    scheduledTime: new Date('2025-01-16T09:00:00'),
+    actualTime: new Date('2025-01-16T09:05:00'),
+    minutesLate: 5,  // Within grace period
+  },
+];
+
+const overtimeOccurrences: OvertimeOccurrence[] = [
+  {
+    date: new Date('2025-01-18'),  // Saturday
+    type: 'weekend-saturday',
+    hours: 8,
+    multiplier: 1.5,
+  },
+  {
+    date: new Date('2025-01-20'),
+    type: 'night-shift',
+    hours: 8,
+    multiplier: 1.3,
+  },
+];
+
+const result = calculateShiftCompliance({
+  attendance: {
+    lateOccurrences,
+    overtimeOccurrences,
+  },
+  policy,
+  dailyWage: 1500,
+  hourlyRate: 200,
+});
+
+// Access detailed breakdowns
+result.latePenalty.breakdown.forEach(item => {
+  console.log({
+    date: item.date,
+    minutesLate: item.minutesLate,
+    penalty: item.penaltyAmount,
+    tier: item.tier,  // Which tier applied (for tiered mode)
+    waived: item.waived,  // true if within grace period
+  });
+});
+```
+
+### Storing Policies in Database (Optional)
+
+If you want to store policies in MongoDB:
+
+```typescript
+import { AttendancePolicySchema } from '@classytic/payroll';
+import { model } from 'mongoose';
+
+// Use our schema as-is
+const AttendancePolicy = model('AttendancePolicy', AttendancePolicySchema);
+
+// Or extend with your own fields
+const CustomPolicySchema = new Schema({
+  ...AttendancePolicySchema.obj,
+  approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  department: String,
+  tags: [String],
+});
+const CustomPolicy = model('CustomPolicy', CustomPolicySchema);
+
+// Create and save
+const policy = new AttendancePolicy({
+  name: 'Manufacturing Policy',
+  organizationId: org._id,
+  lateArrival: {
+    enabled: true,
+    gracePeriod: 0,
+    mode: 'flat',
+    flatAmount: 100,
+  },
+  earlyDeparture: {
+    enabled: true,
+    gracePeriod: 0,
+    mode: 'flat',
+    flatAmount: 150,
+  },
+  overtime: {
+    enabled: true,
+    mode: 'daily',
+    dailyThreshold: 8,
+    dailyMultiplier: 1.5,
+  },
+  effectiveFrom: new Date(),
+  active: true,
+});
+await policy.save();
+
+// Query active policy
+const activePolicy = await AttendancePolicy.findActiveForOrganization(org._id);
+
+// Check if currently active
+if (policy.isCurrentlyActive()) {
+  // Use this policy
+}
+```
+
+### Integration Example
+
+Complete workflow integrating with attendance and payroll:
+
+```typescript
+import { calculateShiftCompliance, createPolicyFromPreset } from '@classytic/payroll';
+
+async function processMonthlyPayroll(employee, month, year) {
+  // 1. Get attendance data (from ClockIn or your system)
+  const attendance = await getAttendanceData(employee._id, month, year);
+
+  // 2. Get applicable policy
+  const policy = await AttendancePolicy.findActiveForOrganization(employee.organizationId);
+
+  // 3. Calculate shift compliance
+  const compliance = calculateShiftCompliance({
+    attendance: {
+      lateArrivals: attendance.lateCount,
+      totalLateMinutes: attendance.totalLateMinutes,
+      earlyDepartures: attendance.earlyCount,
+      totalEarlyMinutes: attendance.totalEarlyMinutes,
+      overtimeHours: attendance.overtimeHours,
+    },
+    policy,
+    dailyWage: employee.compensation.baseAmount / 30,
+    hourlyRate: employee.compensation.baseAmount / 30 / 8,
+  });
+
+  // 4. Process payroll with adjustments
+  const result = await payroll.processSalary({
+    employeeId: employee._id,
+    organizationId: employee.organizationId,
+    month,
+    year,
+    additionalAllowances: [
+      {
+        name: 'Overtime Bonus',
+        amount: compliance.totalBonuses,
+        type: 'overtime',
+      },
+    ],
+    additionalDeductions: [
+      {
+        name: 'Shift Compliance Penalties',
+        amount: compliance.totalPenalties,
+        type: 'late_penalty',
+      },
+    ],
+  });
+
+  // 5. Log compliance metrics
+  console.log({
+    complianceScore: compliance.complianceScore,
+    isAtRisk: compliance.isAtRisk,
+    netAdjustment: compliance.netAdjustment,
+  });
+
+  return result;
+}
+```
+
+### Pure Functions (No Database)
+
+Shift compliance calculations are pure functions - no database required:
+
+```typescript
+// Client-side preview
+function previewShiftAdjustment(lateMinutes: number, overtimeHours: number) {
+  const policy = createPolicyFromPreset('default');
+
+  const result = calculateShiftCompliance({
+    attendance: {
+      lateArrivals: Math.ceil(lateMinutes / 10),
+      totalLateMinutes: lateMinutes,
+      overtimeHours,
+    },
+    policy,
+    dailyWage: 1500,
+    hourlyRate: 200,
+  });
+
+  return {
+    penalty: result.totalPenalties,
+    bonus: result.totalBonuses,
+    net: result.netAdjustment,
+  };
+}
+```
+
+### API Reference
+
+#### Main Calculator
+
+```typescript
+calculateShiftCompliance(input: {
+  attendance: ShiftComplianceData;
+  policy: AttendancePolicy;
+  dailyWage: number;
+  hourlyRate: number;
+  currentOccurrenceCount?: number;
+}): ShiftComplianceResult
+```
+
+#### Factory Function
+
+```typescript
+createPolicyFromPreset(
+  preset: 'default' | 'manufacturing' | 'retail' | 'office' | 'healthcare' | 'hospitality',
+  overrides?: Partial<AttendancePolicy>
+): AttendancePolicy
+```
+
+#### Builder API
+
+```typescript
+AttendancePolicyBuilder.create()
+  .named(string)
+  .description(string)
+  .organizationId(ObjectId)
+  .lateArrival() ...
+  .earlyDeparture() ...
+  .overtime() ...
+  .clockRounding() ...
+  .build()
+```
+
+---
 
 ## Logging
 

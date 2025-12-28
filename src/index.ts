@@ -171,7 +171,6 @@ export {
 export {
   HRM_CONFIG,
   mergeConfig,
-  calculateTax,
   determineOrgRole,
 } from './config.js';
 
@@ -288,3 +287,108 @@ export {
   type ReviewResult,
   type OverlapCheckResult,
 } from './services/index.js';
+
+// ============================================================================
+// Shift Compliance (NEW)
+// ============================================================================
+
+export {
+  // Main calculator
+  calculateShiftCompliance,
+
+  // Individual calculators (for advanced usage)
+  calculateLatePenalty,
+  calculateOvertimeBonus,
+
+  // Granular calculation functions
+  calculateFlatPenalty,
+  calculatePerMinutePenalty,
+  calculatePercentagePenalty,
+  calculateTieredPenalty,
+  calculateDailyOvertime,
+  calculateWeeklyOvertime,
+  calculateMonthlyOvertime,
+  calculateWeekendPremium,
+  calculateNightShiftDifferential,
+
+  // Preset policies
+  createPolicyFromPreset,
+  DEFAULT_ATTENDANCE_POLICY,
+  MANUFACTURING_POLICY,
+  RETAIL_POLICY,
+  OFFICE_POLICY,
+  HEALTHCARE_POLICY,
+  HOSPITALITY_POLICY,
+
+  // Fluent builders
+  AttendancePolicyBuilder,
+  createLatePolicyBuilder,
+  createOvertimePolicyBuilder,
+  createClockRoundingPolicyBuilder,
+  LatePolicyBuilder,
+  TieredPenaltyBuilder,
+  OvertimePolicyBuilder,
+  ClockRoundingPolicyBuilder,
+
+  // Mongoose schemas (optional)
+  AttendancePolicySchema,
+  AttendancePolicySchemaDefinition,
+  LateArrivalPolicySchema,
+  LateArrivalPolicySchemaDefinition,
+  EarlyDeparturePolicySchema,
+  EarlyDeparturePolicySchemaDefinition,
+  OvertimePolicySchema,
+  OvertimePolicySchemaDefinition,
+  ClockRoundingPolicySchema,
+  ClockRoundingPolicySchemaDefinition,
+  PenaltyTierSchema,
+  PenaltyTierSchemaDefinition,
+  MaxPenaltiesSchema,
+  MaxPenaltiesSchemaDefinition,
+  WeekendPremiumSchema,
+  WeekendPremiumSchemaDefinition,
+  NightShiftDifferentialSchema,
+  NightShiftDifferentialSchemaDefinition,
+
+  // Main types
+  type AttendancePolicy,
+  type ShiftComplianceData,
+  type ShiftComplianceResult,
+  type CalculateShiftComplianceInput,
+
+  // Policy types
+  type LateArrivalPolicy,
+  type EarlyDeparturePolicy,
+  type OvertimePolicy,
+  type ClockRoundingPolicy,
+
+  // Mode and configuration types
+  type PenaltyMode,
+  type OvertimeMode,
+  type ResetPeriod,
+  type RoundingMode,
+
+  // Supporting types
+  type PenaltyTier,
+  type MaxPenaltiesPerPeriod,
+  type WeekendPremium,
+  type NightShiftDifferential,
+
+  // Occurrence types
+  type LateOccurrence,
+  type EarlyOccurrence,
+  type OvertimeOccurrence,
+
+  // Result types
+  type LatePenaltyResult,
+  type EarlyDeparturePenaltyResult,
+  type OvertimeBonusResult,
+  type ShiftDifferentialResult,
+
+  // Manager override types
+  type PenaltyOverride,
+
+  // Schema model interfaces
+  type AttendancePolicyDocument,
+  type AttendancePolicyModel,
+} from './shift-compliance/index.js';
