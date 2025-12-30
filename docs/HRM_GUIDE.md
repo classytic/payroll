@@ -109,14 +109,14 @@ import { Schema, model } from 'mongoose';
 
 const transactionSchema = new Schema({
   organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true },
-  type: { type: String, enum: ['income', 'expense'], required: true },
+  type: { type: String, enum: ['inflow', 'outflow'], required: true },
   category: { type: String, required: true },
   amount: { type: Number, required: true },
   method: { type: String, default: 'bank' },
   status: { type: String, default: 'completed' },
   date: { type: Date, default: Date.now },
-  referenceId: Schema.Types.ObjectId,
-  referenceModel: String,
+  sourceId: Schema.Types.ObjectId,
+  sourceModel: String,
   handledBy: { type: Schema.Types.ObjectId, ref: 'User' },
   notes: String,
   metadata: { type: Schema.Types.Mixed },

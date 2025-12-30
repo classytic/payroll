@@ -139,6 +139,44 @@ console.log(result.payrollRecord.breakdown);
 // }
 ```
 
+## Unified Cashflow Model (Transactions)
+
+Payroll writes one **unified transaction** per salary run. The same shape is used by revenue, so you can keep a single cashflow table across packages. Shared types are just interfaces — you define your own schema, enums, and indexes (no required common schema).
+
+If you only use payroll, you can import types from `@classytic/payroll`. For shared payroll + revenue, use `@classytic/shared-types`.
+
+```typescript
+import { Schema, model } from 'mongoose';
+import type { ITransaction } from '@classytic/shared-types';
+
+const transactionSchema = new Schema<ITransaction>({
+  organizationId: { type: Schema.Types.ObjectId },
+  employeeId: { type: Schema.Types.ObjectId },
+  type: { type: String, required: true }, // category, e.g. 'salary'
+  flow: { type: String, enum: ['inflow', 'outflow'], required: true },
+  amount: { type: Number, required: true },
+  currency: { type: String, default: 'USD' },
+  sourceId: { type: Schema.Types.ObjectId },   // optional link to your app entity
+  sourceModel: { type: String },               // optional link to your app entity
+  tax: Number,
+  net: Number,
+  status: { type: String, default: 'completed' },
+  date: { type: Date, default: Date.now },
+});
+
+const Transaction = model<ITransaction>('Transaction', transactionSchema);
+```
+
+**Under the hood**
+- Payroll creates one transaction per salary run.
+- `flow` is always `outflow` for payroll.
+- `type` is your app-defined category (e.g. `salary`, `bonus`).
+- `sourceId/sourceModel` link the transaction back to `PayrollRecord`.
+
+**Type safety**
+- We only share `ITransaction` as the interface.
+- You define your own categories and roles in your app (no hardcoded enums required).
+
 ## Single-Tenant Setup
 
 Building a single-organization HRM? Configure once, forget `organizationId` everywhere else:
@@ -601,13 +639,7 @@ export async function processMonthlyPayroll(jobId: string) {
 
 ### Why This Matters
 
-Users were choosing **Odoo** and **Zoho** because they needed:
-- ✅ Progress tracking for long-running payroll jobs
-- ✅ Ability to cancel operations mid-processing
-- ✅ Batch processing to prevent server crashes
-- ✅ Concurrency for processing 1000+ employees
-
-Now you have all of these features with **full backward compatibility**. No breaking changes.
+You get predictable, long-running payroll runs with progress updates, cancellation support, and safe batching—without changing your API surface.
 
 ## Leave Management
 
@@ -1038,7 +1070,7 @@ console.log(result);
 
 ### Industry Presets
 
-Six industry-standard policies based on research from SAP, Workday, ADP, and Zoho:
+Six practical presets for common operational patterns:
 
 ```typescript
 import {

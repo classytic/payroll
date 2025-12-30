@@ -15,9 +15,7 @@ import type {
   DeductionType,
   PayrollStatus,
   TerminationReason,
-  HRMTransactionCategory,
   SalaryBand,
-  OrgRole,
 } from './types.js';
 
 // ============================================================================
@@ -215,24 +213,6 @@ export function isValidTerminationReason(value: string): value is TerminationRea
 }
 
 // ============================================================================
-// HRM Transaction Categories
-// ============================================================================
-
-export const HRM_TRANSACTION_CATEGORIES = {
-  SALARY: 'salary',
-  BONUS: 'bonus',
-  COMMISSION: 'commission',
-  OVERTIME: 'overtime',
-  SEVERANCE: 'severance',
-} as const satisfies Record<string, HRMTransactionCategory>;
-
-export const HRM_CATEGORY_VALUES = Object.values(HRM_TRANSACTION_CATEGORIES);
-
-export function isHRMManagedCategory(category: string): category is HRMTransactionCategory {
-  return HRM_CATEGORY_VALUES.includes(category as HRMTransactionCategory);
-}
-
-// ============================================================================
 // Salary Band
 // ============================================================================
 
@@ -250,25 +230,6 @@ export const SALARY_BAND_VALUES = Object.values(SALARY_BAND);
 
 export function isValidSalaryBand(value: string): value is SalaryBand {
   return SALARY_BAND_VALUES.includes(value as SalaryBand);
-}
-
-// ============================================================================
-// Organization Role
-// ============================================================================
-
-export const ORG_ROLE = {
-  OWNER: 'owner',
-  MANAGER: 'manager',
-  TRAINER: 'trainer',
-  STAFF: 'staff',
-  INTERN: 'intern',
-  CONSULTANT: 'consultant',
-} as const satisfies Record<string, OrgRole>;
-
-export const ORG_ROLE_VALUES = Object.values(ORG_ROLE);
-
-export function isValidOrgRole(value: string): value is OrgRole {
-  return ORG_ROLE_VALUES.includes(value as OrgRole);
 }
 
 // ============================================================================
@@ -346,15 +307,10 @@ export default {
   PAYROLL_STATUS_VALUES,
   TERMINATION_REASON,
   TERMINATION_REASON_VALUES,
-  HRM_TRANSACTION_CATEGORIES,
-  HRM_CATEGORY_VALUES,
   SALARY_BAND,
   SALARY_BAND_VALUES,
-  ORG_ROLE,
-  ORG_ROLE_VALUES,
   LEAVE_TYPE,
   LEAVE_TYPE_VALUES,
   LEAVE_REQUEST_STATUS,
   LEAVE_REQUEST_STATUS_VALUES,
 };
-

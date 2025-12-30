@@ -46,7 +46,6 @@ import { EventBus, createEventBus, type PayrollEventMap } from './core/events.js
 import { PluginManager, type PayrollPluginDefinition, type PluginContext } from './core/plugin.js';
 import { EmployeeFactory } from './factories/employee.factory.js';
 import { TAX_BRACKETS } from './config.js';
-import { HRM_TRANSACTION_CATEGORIES } from './enums.js';
 import { employee as employeeQuery, payroll as payrollQuery, toObjectId } from './utils/query-builders.js';
 import { getPayPeriod, addMonths } from './utils/date.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions, applyTaxBrackets } from './utils/calculation.js';
@@ -885,30 +884,74 @@ export class Payroll<
         processedBy: context?.userId ? toObjectId(context.userId) : undefined,
       }], session ? { session } : {}) as unknown as [TPayrollRecord & PayrollRecordDocument];
 
+      // ✅ UNIFIED TRANSACTION CREATION
       const [transaction] = await (this.models.TransactionModel as Model<AnyDocument>).create([{
         organizationId: employee.organizationId,
-        type: 'expense',
-        category: HRM_TRANSACTION_CATEGORIES.SALARY,
-        amount: breakdown.netSalary,
+
+        // ✅ UNIFIED: Use 'salary' as type directly
+        type: 'salary',
+        flow: 'outflow',  // Payroll transactions are expenses
+        tags: ['recurring', 'payroll', 'monthly'],
+
+        // ✅ UNIFIED: Amount structure
+        amount: breakdown.grossSalary,  // Gross salary (before deductions)
+        currency: 'BDT',
+        fee: 0,  // No processing fees for payroll
+        tax: breakdown.taxAmount || 0,  // ✅ Income tax at top level (same field as revenue!)
+        net: breakdown.netSalary,  // Net after tax and deductions
+
+        // ✅ UNIFIED: Tax details
+        taxDetails: {
+          type: 'income_tax',
+          rate: breakdown.grossSalary > 0 ? (breakdown.taxAmount || 0) / breakdown.grossSalary : 0,
+          jurisdiction: 'BD'  // Bangladesh - could be dynamic
+        },
+
         method: paymentMethod,
         status: 'completed',
         date: paymentDate,
-        referenceId: employee._id,
-        referenceModel: 'Employee',
+
+        // Payroll-specific fields
+        employeeId: employee._id,
+        customerId: employee.userId as mongoose.Types.ObjectId,  // Employee's user ID
         handledBy: context?.userId ? toObjectId(context.userId) : undefined,
-        notes: `Salary payment - ${(employee.userId as { name?: string })?.name || employee.employeeId} (${month}/${year})`,
+
+        // ✅ UNIFIED: Breakdown structure
+        breakdown: {
+          base: breakdown.baseAmount,
+          additions: breakdown.allowances.map(a => ({
+            type: a.type,
+            amount: a.amount,
+            description: a.type,
+            isTaxable: a.taxable
+          })),
+          deductions: breakdown.deductions.map(d => ({
+            type: d.type,
+            amount: d.amount,
+            description: d.description
+          })),
+          period: {
+            month,
+            year,
+            start: new Date(year, month - 1, 1),
+            end: new Date(year, month, 0)
+          },
+          workingDays: breakdown.workingDays ? {
+            expected: breakdown.workingDays,
+            actual: breakdown.actualDays || breakdown.workingDays
+          } : undefined
+        },
+
+        // ✅ UNIFIED: Source reference (links to PayrollRecord)
+        sourceId: payrollRecord._id,
+        sourceModel: 'PayrollRecord',
+
+        description: `Salary payment - ${(employee.userId as { name?: string })?.name || employee.employeeId} (${month}/${year})`,
+        notes: breakdown.proRatedAmount ? `Pro-rated: ${breakdown.actualDays}/${breakdown.workingDays} days` : undefined,
+
         metadata: {
           employeeId: employee.employeeId,
-          payrollRecordId: payrollRecord._id,
-          period: { month, year },
-          breakdown: {
-            base: breakdown.baseAmount,
-            allowances: sumAllowances(breakdown.allowances),
-            deductions: sumDeductions(breakdown.deductions),
-            tax: breakdown.taxAmount || 0,
-            gross: breakdown.grossSalary,
-            net: breakdown.netSalary,
-          },
+          payrollRecordId: payrollRecord._id.toString(),
         },
       }], session ? { session } : {}) as unknown as [TTransaction & { _id: mongoose.Types.ObjectId }];
 

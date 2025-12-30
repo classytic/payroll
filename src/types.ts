@@ -155,14 +155,8 @@ export type SalaryBand =
   | 'executive'
   | 'custom';
 
-/** Organization role */
-export type OrgRole =
-  | 'owner'
-  | 'manager'
-  | 'trainer'
-  | 'staff'
-  | 'intern'
-  | 'consultant';
+/** Organization role (app-defined) */
+export type OrgRole = string;
 
 /** Leave type */
 export type LeaveType =
@@ -1308,4 +1302,3 @@ export interface WorkingDaysOptions {
   /** Include end date in calculation (default: true) */
   includeEndDate?: boolean;
 }
-

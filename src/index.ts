@@ -72,7 +72,6 @@ export type {
   PaymentMethod,
   PayrollStatus,
   PaymentFrequency,
-  HRMTransactionCategory,
   SalaryBand,
   OrgRole,
   LeaveType,
@@ -142,6 +141,19 @@ export type {
 } from './types.js';
 
 // ============================================================================
+// TRANSACTION INTERFACE (for app-level schema)
+// ============================================================================
+
+export type {
+  IPayrollTransaction,
+  IPayrollTransactionCreateInput,
+} from './types/transaction.interface.js';
+
+export {
+  isPayrollTransaction,
+} from './types/transaction.interface.js';
+
+// ============================================================================
 // Enums / Constants (common)
 // ============================================================================
 
@@ -154,7 +166,6 @@ export {
   DEDUCTION_TYPE,
   PAYROLL_STATUS,
   TERMINATION_REASON,
-  HRM_TRANSACTION_CATEGORIES,
   LEAVE_TYPE,
   LEAVE_REQUEST_STATUS,
   isValidLeaveType,

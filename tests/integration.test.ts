@@ -86,19 +86,45 @@ const userSchema = new Schema({
 
 const User = model('User', userSchema);
 
+// ✅ UNIFIED TRANSACTION SCHEMA (matching app-level schema)
 const transactionSchema = new Schema({
   organizationId: Schema.Types.ObjectId,
-  type: String,
-  category: String,
-  amount: Number,
+  customerId: Schema.Types.ObjectId,
+
+  // ✅ UNIFIED: Type system
+  type: String,              // 'salary', 'subscription', etc.
+  flow: String,              // 'inflow' or 'outflow'
+  tags: [String],
+
+  // ✅ UNIFIED: Amount structure
+  amount: Number,            // Gross amount
+  currency: String,
+  fee: { type: Number, default: 0 },
+  tax: { type: Number, default: 0 },  // Top-level number
+  net: Number,               // Net = amount - fee - tax
+
+  // ✅ UNIFIED: Tax metadata (use Mixed to avoid conflicts with 'type' field)
+  taxDetails: Schema.Types.Mixed,
+
   method: String,
   status: String,
   date: Date,
-  referenceId: Schema.Types.ObjectId,
-  referenceModel: String,
+
+  // ✅ UNIFIED: Source references
+  sourceId: Schema.Types.ObjectId,
+  sourceModel: String,
+  relatedTransactionId: Schema.Types.ObjectId,
+
+  // Payroll-specific
+  employeeId: Schema.Types.ObjectId,
+  breakdown: Schema.Types.Mixed,
+
   handledBy: Schema.Types.ObjectId,
   notes: String,
   metadata: Schema.Types.Mixed,
+
+  // Legacy fields (for backward compatibility)
+  category: String,
 }, { timestamps: true });
 
 const Transaction = model('Transaction', transactionSchema);
@@ -229,9 +255,10 @@ describe('Payroll + Attendance Flow', () => {
     // 1 absent day ≈ 5238 deduction
     expect(result.payrollRecord.breakdown.attendanceDeduction).toBeCloseTo(5238, -2);
 
-    // Verify transaction created
-    expect(result.transaction.amount).toBe(result.payrollRecord.breakdown.netSalary);
-    expect(result.transaction.category).toBe('salary');
+    // Verify transaction created (UNIFIED STRUCTURE)
+    expect(result.transaction.amount).toBe(result.payrollRecord.breakdown.grossSalary); // ✅ Amount is gross
+    expect(result.transaction.net).toBe(result.payrollRecord.breakdown.netSalary); // ✅ Net is take-home
+    expect(result.transaction.type).toBe('salary'); // ✅ Changed from category
   });
 
   it('should process payroll without attendance (no deduction)', async () => {
