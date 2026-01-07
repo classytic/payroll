@@ -1,7 +1,17 @@
 /**
  * @classytic/payroll - Services
  *
- * High-level service abstractions
+ * High-level service abstractions (INTERNAL USE ONLY)
+ *
+ * All services enforce multi-tenant isolation. Every method requires
+ * `organizationId` parameter to prevent cross-tenant data access.
+ *
+ * **For Application Code:**
+ * - Use `Payroll` class methods (recommended, full orchestration)
+ * - Use `findEmployeeSecure()` utility for secure lookups
+ * - DO NOT use services directly
+ *
+ * Services are kept internal for use by Payroll class only.
  */
 
 // ============================================================================
@@ -32,18 +42,12 @@ export {
 } from './compensation.service.js';
 
 // ============================================================================
-// Leave Service
+// Tax Withholding Service
 // ============================================================================
 
 export {
-  LeaveService,
-  createLeaveService,
-  type LeaveServiceConfig,
-  type RequestLeaveParams,
-  type ReviewLeaveParams,
-  type CancelLeaveParams,
-  type LeaveForPayrollParams,
-  type LeaveRequestResult,
-  type ReviewResult,
-  type OverlapCheckResult,
-} from './leave.service.js';
+  TaxWithholdingService,
+  createTaxWithholdingService,
+  type TaxWithholdingServiceConfig,
+  type CreateFromBreakdownParams,
+} from './tax-withholding.service.js';

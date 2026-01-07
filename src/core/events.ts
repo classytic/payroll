@@ -139,6 +139,44 @@ export interface MilestoneAchievedEventPayload {
   organizationId: ObjectId;
 }
 
+export interface TaxWithheldEventPayload {
+  withholding: {
+    id: ObjectId;
+    taxType: string;
+    amount: number;
+  };
+  employee: {
+    id: ObjectId;
+    employeeId: string;
+  };
+  payrollRecord: {
+    id: ObjectId;
+  };
+  period: {
+    month: number;
+    year: number;
+  };
+  organizationId: ObjectId;
+  context?: OperationContext;
+}
+
+export interface TaxPaidEventPayload {
+  withholdings: Array<{
+    id: ObjectId;
+    taxType: string;
+    amount: number;
+  }>;
+  transaction?: {
+    id: ObjectId;
+    amount: number;
+  };
+  totalAmount: number;
+  referenceNumber?: string;
+  paidAt: Date;
+  organizationId: ObjectId;
+  context?: OperationContext;
+}
+
 // ============================================================================
 // Event Map
 // ============================================================================
@@ -154,6 +192,8 @@ export interface PayrollEventMap {
   'payroll:exported': PayrollExportedEventPayload;
   'compensation:changed': CompensationChangedEventPayload;
   'milestone:achieved': MilestoneAchievedEventPayload;
+  'tax:withheld': TaxWithheldEventPayload;
+  'tax:paid': TaxPaidEventPayload;
 }
 
 export type PayrollEventType = keyof PayrollEventMap;

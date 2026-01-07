@@ -184,3 +184,44 @@ export {
   default as leaveUtils,
 } from './leave.js';
 
+// ============================================================================
+// Secure Employee Lookup (Multi-Tenant Safety)
+// ============================================================================
+
+export {
+  findEmployeeSecure,
+  employeeExistsSecure,
+  findEmployeesSecure,
+  requireOrganizationId,
+  type SecureEmployeeLookupOptions,
+  type EmployeeIdMode,
+} from './employee-lookup.js';
+
+// ============================================================================
+// Organization Resolution (Smart Auto-Detection)
+// ============================================================================
+
+export {
+  resolveOrganizationId,
+  validateOrganizationId,
+  tryResolveOrganizationId,
+  type ResolveOrganizationIdParams,
+  type ContainerLike,
+} from './org-resolution.js';
+
+// ============================================================================
+// Employee Identity (Dual ID System)
+// ============================================================================
+
+export {
+  detectEmployeeIdType,
+  normalizeEmployeeId,
+  isStringEmployeeId,
+  isObjectIdEmployeeId,
+  formatEmployeeId,
+  type EmployeeIdType,
+  type EmployeeQueryFilter,
+} from './employee-identity.js';
+
+// Note: buildEmployeeQuery from employee-identity.js is intentionally not exported
+// to avoid naming conflict with query-builders.js. It's used internally by findEmployeeSecure.

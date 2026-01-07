@@ -285,6 +285,50 @@ export function isApprovedLeaveStatus(status: LeaveRequestStatus): boolean {
 }
 
 // ============================================================================
+// Tax Type
+// ============================================================================
+
+export const TAX_TYPE = {
+  INCOME_TAX: 'income_tax',
+  SOCIAL_SECURITY: 'social_security',
+  HEALTH_INSURANCE: 'health_insurance',
+  PENSION: 'pension',
+  EMPLOYMENT_INSURANCE: 'employment_insurance',
+  LOCAL_TAX: 'local_tax',
+  OTHER: 'other',
+} as const satisfies Record<string, import('./types.js').TaxType>;
+
+export const TAX_TYPE_VALUES = Object.values(TAX_TYPE);
+
+export function isValidTaxType(value: string): value is import('./types.js').TaxType {
+  return TAX_TYPE_VALUES.includes(value as import('./types.js').TaxType);
+}
+
+// ============================================================================
+// Tax Status
+// ============================================================================
+
+export const TAX_STATUS = {
+  PENDING: 'pending',
+  SUBMITTED: 'submitted',
+  PAID: 'paid',
+} as const satisfies Record<string, import('./types.js').TaxStatus>;
+
+export const TAX_STATUS_VALUES = Object.values(TAX_STATUS);
+
+export function isValidTaxStatus(value: string): value is import('./types.js').TaxStatus {
+  return TAX_STATUS_VALUES.includes(value as import('./types.js').TaxStatus);
+}
+
+export function isPendingTaxStatus(status: import('./types.js').TaxStatus): boolean {
+  return status === TAX_STATUS.PENDING;
+}
+
+export function isPaidTaxStatus(status: import('./types.js').TaxStatus): boolean {
+  return status === TAX_STATUS.PAID;
+}
+
+// ============================================================================
 // Default Export
 // ============================================================================
 
@@ -313,4 +357,8 @@ export default {
   LEAVE_TYPE_VALUES,
   LEAVE_REQUEST_STATUS,
   LEAVE_REQUEST_STATUS_VALUES,
+  TAX_TYPE,
+  TAX_TYPE_VALUES,
+  TAX_STATUS,
+  TAX_STATUS_VALUES,
 };

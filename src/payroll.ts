@@ -15,6 +15,8 @@ import type {
   PayrollInstance,
   EmployeeDocument,
   PayrollRecordDocument,
+  LeaveRequestDocument,
+  TaxWithholdingDocument,
   AnyDocument,
   HireEmployeeParams,
   UpdateEmploymentParams,
@@ -40,18 +42,32 @@ import type {
   DeepPartial,
   Allowance,
   Deduction,
+  GetPendingTaxParams,
+  TaxSummaryParams,
+  TaxSummaryResult,
+  MarkTaxPaidParams,
+  OperationContext,
 } from './types.js';
 import { Container, type ModelsContainer, resetDefaultContainer } from './core/container.js';
-import { EventBus, createEventBus, type PayrollEventMap } from './core/events.js';
+import { EventBus, createEventBus, type PayrollEventMap, type PayrollEventType } from './core/events.js';
 import { PluginManager, type PayrollPluginDefinition, type PluginContext } from './core/plugin.js';
+import { IdempotencyManager, generatePayrollIdempotencyKey, type IdempotentResult } from './core/idempotency.js';
+import { WebhookManager, type WebhookConfig } from './core/webhooks.js';
 import { EmployeeFactory } from './factories/employee.factory.js';
+import { createPayrollTransaction } from './factories/transaction.factory.js';
 import { TAX_BRACKETS } from './config.js';
-import { employee as employeeQuery, payroll as payrollQuery, toObjectId } from './utils/query-builders.js';
+import { employee as employeeQuery, payroll as payrollQuery, toObjectId, isValidObjectId } from './utils/query-builders.js';
+import { findEmployeeSecure, type SecureEmployeeLookupOptions } from './utils/employee-lookup.js';
+import { resolveOrganizationId } from './utils/org-resolution.js';
 import { getPayPeriod, addMonths } from './utils/date.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions, applyTaxBrackets } from './utils/calculation.js';
 import { getLogger, setLogger } from './utils/logger.js';
 import { NotInitializedError, EmployeeNotFoundError, DuplicatePayrollError, NotEligibleError, EmployeeTerminatedError, ValidationError } from './errors/index.js';
 import { countWorkingDays, type AttendanceInput, type PayrollProcessingOptions } from './core/config.js';
+import { EmployeeService, createEmployeeService } from './services/employee.service.js';
+import { PayrollService, createPayrollService } from './services/payroll.service.js';
+import { CompensationService, createCompensationService } from './services/compensation.service.js';
+import { calculateSalaryBreakdown as calculateSalaryBreakdownPure } from './calculators/salary.calculator.js';
 
 // ============================================================================
 // Helper: Check plugin methods exist
@@ -127,6 +143,15 @@ export class Payroll<
   private _plugins: PluginManager | null = null;
   private _initialized = false;
 
+  // Service layer delegation (lazy initialization)
+  private _employeeService?: EmployeeService;
+  private _payrollService?: PayrollService;
+  private _compensationService?: CompensationService;
+
+  // Idempotency & Webhooks (Stripe-level features)
+  private _idempotency: IdempotencyManager;
+  private _webhooks: WebhookManager;
+
   /**
    * Create a new Payroll instance with its own container.
    * Each instance is isolated - no shared global state.
@@ -135,6 +160,11 @@ export class Payroll<
     // Each Payroll instance gets its own Container (no global singleton)
     this._container = new Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>();
     this._events = createEventBus();
+    this._idempotency = new IdempotencyManager();
+    this._webhooks = new WebhookManager();
+
+    // Connect webhooks to events
+    this.setupWebhookBridge();
   }
 
   // ========================================
@@ -207,6 +237,100 @@ export class Payroll<
     }
   }
 
+  // ========================================
+  // Helper Methods
+  // ========================================
+
+  /**
+   * Resolve employeeId to ObjectId _id (respects explicit mode)
+   * 
+   * Mode priority:
+   * - 'objectId': Always treat as MongoDB ObjectId (direct _id lookup)
+   * - 'businessId': Always treat as business ID (lookup by employeeId field)
+   * - 'auto': Smart detection (ObjectId-like → _id, otherwise → businessId)
+   */
+  private async resolveEmployeeId(
+    employeeId: ObjectIdLike | string,
+    employeeIdMode: 'auto' | 'objectId' | 'businessId' | undefined,
+    organizationId: ObjectIdLike,
+    session?: ClientSession
+  ): Promise<mongoose.Types.ObjectId> {
+    const mode = employeeIdMode || 'auto';
+
+    // Explicit mode: 'objectId' - Force treat as MongoDB _id
+    if (mode === 'objectId') {
+      return toObjectId(employeeId as ObjectIdLike);
+    }
+
+    // Explicit mode: 'businessId' - Force treat as business ID (even if looks like ObjectId)
+    if (mode === 'businessId') {
+      const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+        employeeId,
+        employeeIdMode: 'businessId',
+        organizationId,
+        session
+      });
+      return employee._id;
+    }
+
+    // Auto mode: Smart detection
+    if (isValidObjectId(employeeId)) {
+      return toObjectId(employeeId as ObjectIdLike);
+    }
+
+    // String that's not ObjectId-like - treat as business ID
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,
+      employeeIdMode: 'businessId',
+      organizationId,
+      session
+    });
+
+    return employee._id;
+  }
+
+  // ========================================
+  // Lazy Service Initialization
+  // ========================================
+
+  /**
+   * Get EmployeeService (lazy initialization)
+   */
+  private get employeeService(): EmployeeService {
+    if (!this._employeeService) {
+      this._employeeService = createEmployeeService(
+        this.models.EmployeeModel as any,
+        this.config
+      );
+    }
+    return this._employeeService;
+  }
+
+  /**
+   * Get PayrollService (lazy initialization)
+   */
+  private get payrollService(): PayrollService {
+    if (!this._payrollService) {
+      this._payrollService = createPayrollService(
+        this.models.PayrollRecordModel as any,
+        this.employeeService // Uses lazy getter
+      );
+    }
+    return this._payrollService;
+  }
+
+  /**
+   * Get CompensationService (lazy initialization)
+   */
+  private get compensationService(): CompensationService {
+    if (!this._compensationService) {
+      this._compensationService = createCompensationService(
+        this.models.EmployeeModel as any
+      );
+    }
+    return this._compensationService;
+  }
+
   /**
    * Get models (strongly typed)
    */
@@ -220,6 +344,13 @@ export class Payroll<
    */
   private get config(): HRMConfig {
     return this._container.getConfig();
+  }
+
+  /**
+   * Get container (for org resolution and single-tenant detection)
+   */
+  private get container(): Container<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
+    return this._container;
   }
 
   // ========================================
@@ -245,6 +376,54 @@ export class Payroll<
     return this._events.on(event, handler);
   }
 
+  /**
+   * Register webhook URL for events (Stripe-style)
+   */
+  registerWebhook(config: WebhookConfig): void {
+    this._webhooks.register(config);
+  }
+
+  /**
+   * Unregister webhook URL
+   */
+  unregisterWebhook(url: string): void {
+    this._webhooks.unregister(url);
+  }
+
+  /**
+   * Get webhook delivery log
+   */
+  getWebhookDeliveries(options?: { event?: PayrollEventType; status?: 'pending' | 'sent' | 'failed'; limit?: number }) {
+    return this._webhooks.getDeliveries(options);
+  }
+
+  /**
+   * Setup webhook bridge (connects event bus to webhook manager)
+   */
+  private setupWebhookBridge(): void {
+    // Forward all events to webhooks
+    const events: PayrollEventType[] = [
+      'employee:hired',
+      'employee:terminated',
+      'employee:rehired',
+      'salary:updated',
+      'salary:processed',
+      'salary:failed',
+      'payroll:completed',
+      'payroll:exported',
+      'compensation:changed',
+      'milestone:achieved',
+      'tax:withheld',
+      'tax:paid',
+    ];
+
+    events.forEach((event) => {
+      this._events.on(event, async (payload) => {
+        await this._webhooks.send(event, payload);
+      });
+    });
+  }
+
   // ========================================
   // Employment Lifecycle
   // ========================================
@@ -255,15 +434,14 @@ export class Payroll<
   async hire(params: HireEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
     const { userId, employment, compensation, bankDetails, context } = params;
-    const session = context?.session;
-
+    
     // Auto-inject organizationId in single-tenant mode
     const organizationId = params.organizationId ?? this._container.getOrganizationId();
     if (!organizationId) {
       throw new Error('organizationId is required (or configure single-tenant mode)');
     }
 
-    // Validate identity based on config
+    // Validate identity based on config (keep in Payroll for public API validation)
     if (this.config.validation.requireUserId && !userId) {
       throw new ValidationError(
         'userId is required (set validation.requireUserId: false to allow guest employees)',
@@ -278,23 +456,7 @@ export class Payroll<
       );
     }
 
-    // Check for existing active employee (only if userId provided)
-    if (userId) {
-      const existingQuery = employeeQuery()
-        .forUser(userId)
-        .forOrganization(organizationId)
-        .employed()
-        .build();
-
-      let existing = this.models.EmployeeModel.findOne(existingQuery);
-      if (session) existing = existing.session(session);
-
-      if (await existing) {
-        throw new Error('User is already an active employee in this organization');
-      }
-    }
-
-    const employeeData = EmployeeFactory.create({
+    const employee = await this.employeeService.create({
       userId,
       organizationId,
       employment,
@@ -303,80 +465,23 @@ export class Payroll<
         currency: compensation.currency || this.config.payroll.defaultCurrency,
       },
       bankDetails,
-    }, this.config);
+    }, {
+      session: context?.session,
+    });
 
-    // For guest employees, use insertOne to avoid Mongoose setting undefined fields to null
-    // This ensures partial indexes work correctly (partial index only includes docs with userId)
-    let employee: TEmployee;
-
-    if (!userId) {
-      // Guest employee - use direct MongoDB insertOne to preserve partial index behavior
-      // Create a clean object with only defined fields (critical for partial indexes)
-      const dataToInsert: Record<string, any> = {};
-
-      // Copy all fields from employeeData except userId/email which need special handling
-      for (const [key, value] of Object.entries(employeeData)) {
-        // Skip userId and email - we'll handle them explicitly below
-        if (key === 'userId' || key === 'email') continue;
-        dataToInsert[key] = value;
-      }
-
-      // Only include email if it exists and is not empty (critical for partial index)
-      if (employeeData.email && employeeData.email !== '') {
-        dataToInsert.email = employeeData.email;
-      }
-
-      // NEVER include userId for guest employees (partial index excludes docs without userId)
-      // Do not add userId field at all - not even as null or undefined
-
-      // Add timestamps manually since we're bypassing Mongoose
-      const now = new Date();
-      dataToInsert.createdAt = now;
-      dataToInsert.updatedAt = now;
-
-      // Use direct MongoDB insertOne
-      const insertOptions = session ? { session: session as any } : {};
-      const result = await (this.models.EmployeeModel as Model<EmployeeDocument>).collection.insertOne(
-        dataToInsert,
-        insertOptions
-      );
-
-      // Convert back to Mongoose document
-      employee = await (this.models.EmployeeModel as Model<EmployeeDocument>).findById(
-        result.insertedId,
-        null,
-        { session }
-      ) as TEmployee;
-
-      if (!employee) {
-        throw new Error('Failed to retrieve created guest employee');
-      }
-    } else {
-      // Regular employee with userId - use normal Mongoose create
-      const [createdEmployee] = await (this.models.EmployeeModel as Model<EmployeeDocument>).create(
-        [employeeData],
-        { session }
-      ) as unknown as [TEmployee];
-      employee = createdEmployee;
-    }
-
-    // Emit event
+    // Emit high-level business event
     this._events.emitSync('employee:hired', {
       employee: {
-        id: (employee as EmployeeDocument)._id,
-        employeeId: (employee as EmployeeDocument).employeeId,
-        position: (employee as EmployeeDocument).position,
-        department: (employee as EmployeeDocument).department,
+        id: employee._id,
+        employeeId: employee.employeeId,
+        position: employee.position,
+        department: employee.department,
       },
-      organizationId: (employee as EmployeeDocument).organizationId,
+      organizationId: employee.organizationId,
       context,
     });
 
-    getLogger().info('Employee hired', {
-      employeeId: (employee as EmployeeDocument).employeeId,
-      organizationId: organizationId.toString(),
-      position: employment.position,
-    });
+    // Note: Detailed logging already done by EmployeeService
 
     return employee as TEmployee;
   }
@@ -387,16 +492,25 @@ export class Payroll<
    */
   async updateEmployment(params: UpdateEmploymentParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, updates, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, updates, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'updateEmployment'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     if (employee.status === 'terminated') {
       throw new EmployeeTerminatedError(employee.employeeId);
@@ -432,16 +546,25 @@ export class Payroll<
    */
   async terminate(params: TerminateEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, terminationDate = new Date(), reason = 'resignation', notes, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, terminationDate = new Date(), reason = 'resignation', notes, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'terminate'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     // Check plugin method exists
     assertPluginMethod(employee, 'terminate', 'terminate()');
@@ -479,20 +602,29 @@ export class Payroll<
    */
   async reHire(params: ReHireEmployeeParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, hireDate = new Date(), position, department, compensation, context } = params;
-    const session = context?.session;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, hireDate = new Date(), position, department, compensation, context } = params;
 
     if (!this.config.employment.allowReHiring) {
       throw new Error('Re-hiring is not enabled');
     }
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'reHire'
+    });
+
+    const session = context?.session;
+
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     // Check plugin method exists
     assertPluginMethod(employee, 'reHire', 'reHire()');
@@ -527,21 +659,30 @@ export class Payroll<
    * Get employee by ID
    */
   async getEmployee(params: {
-    employeeId: ObjectIdLike;
+    employeeId: ObjectIdLike | string;
+    employeeIdMode?: 'auto' | 'objectId' | 'businessId';
+    organizationId?: ObjectIdLike;
     populateUser?: boolean;
     session?: ClientSession;
+    context?: OperationContext;
   }): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, populateUser = true, session } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, populateUser = true, session, context } = params;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    if (populateUser) query = query.populate('userId', 'name email phone');
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'getEmployee'
+    });
 
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session,
+      populate: populateUser ? 'userId' : undefined
+    });
 
     return employee as TEmployee;
   }
@@ -733,43 +874,44 @@ export class Payroll<
    */
   async updateSalary(params: UpdateSalaryParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, compensation, effectiveFrom = new Date(), context } = params;
-    const session = context?.session;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, compensation, effectiveFrom = new Date(), context } = params;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'updateSalary'
+    });
+
+    // Resolve employeeId to ObjectId if it's a string business ID
+    const resolvedEmployeeId = await this.resolveEmployeeId(employeeId, employeeIdMode, organizationId, context?.session);
+
+    // Get old salary for event (before update)
+    const oldEmployee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId: resolvedEmployeeId,
+      employeeIdMode: 'objectId',  // We resolved it to ObjectId
+      organizationId,
+      session: context?.session
+    });
+
+    if (oldEmployee.status === 'terminated') {
+      throw new EmployeeTerminatedError(oldEmployee.employeeId);
     }
 
-    if (employee.status === 'terminated') {
-      throw new EmployeeTerminatedError(employee.employeeId);
-    }
+    const oldSalary = oldEmployee.compensation.netSalary;
 
-    const oldSalary = employee.compensation.netSalary;
+    const employee = await this.employeeService.updateCompensation(
+      resolvedEmployeeId,
+      organizationId,
+      {
+        ...compensation,
+        effectiveFrom,
+      },
+      { session: context?.session }
+    );
 
-    if (compensation.baseAmount !== undefined) {
-      employee.compensation.baseAmount = compensation.baseAmount;
-    }
-    if (compensation.frequency) {
-      employee.compensation.frequency = compensation.frequency;
-    }
-    if (compensation.currency) {
-      employee.compensation.currency = compensation.currency;
-    }
-
-    employee.compensation.effectiveFrom = effectiveFrom;
-    
-    // Check plugin method exists before calling
-    if (hasPluginMethod(employee, 'updateSalaryCalculations')) {
-      (employee as unknown as { updateSalaryCalculations: () => void }).updateSalaryCalculations();
-    }
-
-    await employee.save({ session });
-
-    // Emit event
+    // Emit high-level business event
     this._events.emitSync('salary:updated', {
       employee: { id: employee._id, employeeId: employee.employeeId },
       previousSalary: oldSalary || 0,
@@ -779,11 +921,7 @@ export class Payroll<
       context,
     });
 
-    getLogger().info('Salary updated', {
-      employeeId: employee.employeeId,
-      oldSalary,
-      newSalary: employee.compensation.netSalary,
-    });
+    // Note: Detailed logging already done by EmployeeService
 
     return employee as TEmployee;
   }
@@ -793,16 +931,25 @@ export class Payroll<
    */
   async addAllowance(params: AddAllowanceParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, amount, isPercentage, value, taxable = true, recurring = true, effectiveFrom = new Date(), effectiveTo, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, type, amount, isPercentage, value, taxable = true, recurring = true, effectiveFrom = new Date(), effectiveTo, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'addAllowance'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     if (employee.status === 'terminated') {
       throw new EmployeeTerminatedError(employee.employeeId);
@@ -843,16 +990,25 @@ export class Payroll<
    */
   async removeAllowance(params: RemoveAllowanceParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, type, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'removeAllowance'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     const before = employee.compensation.allowances?.length || 0;
     
@@ -888,16 +1044,25 @@ export class Payroll<
    */
   async addDeduction(params: AddDeductionParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, amount, isPercentage, value, auto = false, recurring = true, description, effectiveFrom = new Date(), effectiveTo, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, type, amount, isPercentage, value, auto = false, recurring = true, description, effectiveFrom = new Date(), effectiveTo, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'addDeduction'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     if (employee.status === 'terminated') {
       throw new EmployeeTerminatedError(employee.employeeId);
@@ -940,16 +1105,25 @@ export class Payroll<
    */
   async removeDeduction(params: RemoveDeductionParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, type, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, type, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'removeDeduction'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     const before = employee.compensation.deductions?.length || 0;
     
@@ -985,16 +1159,25 @@ export class Payroll<
    */
   async updateBankDetails(params: UpdateBankDetailsParams): Promise<TEmployee> {
     this.ensureInitialized();
-    const { employeeId, bankDetails, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, bankDetails, context } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'updateBankDetails'
+    });
+
     const session = context?.session;
 
-    let query = this.models.EmployeeModel.findById(toObjectId(employeeId));
-    if (session) query = query.session(session);
-    
-    const employee = await query;
-    if (!employee) {
-      throw new EmployeeNotFoundError(employeeId.toString());
-    }
+    // ✅ SECURE: Use secure lookup with organizationId isolation
+    const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+      employeeId,  // Supports both ObjectId and string
+      employeeIdMode,  // Explicit disambiguation if needed
+      organizationId,
+      session
+    });
 
     employee.bankDetails = { ...employee.bankDetails, ...bankDetails };
     await employee.save({ session });
@@ -1021,7 +1204,29 @@ export class Payroll<
     params: ProcessSalaryParams
   ): Promise<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>> {
     this.ensureInitialized();
-    const { employeeId, month, year, paymentDate = new Date(), paymentMethod = 'bank', attendance, options, context } = params;
+    const { employeeId, employeeIdMode, organizationId: explicitOrgId, month, year, paymentDate = new Date(), paymentMethod = 'bank', attendance, options, context, idempotencyKey } = params;
+
+    // CRITICAL: Resolve organizationId with smart detection
+    const organizationId = resolveOrganizationId({
+      explicit: explicitOrgId,
+      context,
+      container: this.container,
+      operation: 'processSalary'
+    });
+
+    // Idempotency: Generate or use provided key
+    const resolvedEmployeeId = await this.resolveEmployeeId(employeeId, employeeIdMode, organizationId, context?.session);
+    const idempotentKey = idempotencyKey || generatePayrollIdempotencyKey(organizationId, resolvedEmployeeId, month, year);
+
+    // Check idempotency cache (Stripe-style)
+    const cached = this._idempotency.get<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>>(idempotentKey);
+    if (cached) {
+      getLogger().info('Returning cached payroll result (idempotent)', {
+        idempotencyKey: idempotentKey,
+        cachedAt: cached.createdAt,
+      });
+      return cached.value;
+    }
 
     // CRITICAL: Use provided session OR create a new transaction
     const providedSession = context?.session;
@@ -1033,13 +1238,14 @@ export class Payroll<
         await session.startTransaction();
       }
 
-      let query = this.models.EmployeeModel.findById(toObjectId(employeeId)).populate('userId', 'name email');
-      if (session) query = query.session(session);
-      
-      const employee = await query;
-      if (!employee) {
-        throw new EmployeeNotFoundError(employeeId.toString());
-      }
+      // ✅ SECURE: Use secure lookup with organizationId isolation
+      const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+        employeeId,  // Supports both ObjectId and string
+        employeeIdMode,  // Explicit disambiguation if needed
+        organizationId,
+        session,
+        populate: 'userId'
+      });
 
       // Check eligibility - with plugin method verification
       const canReceive = hasPluginMethod(employee, 'canReceiveSalary')
@@ -1051,8 +1257,9 @@ export class Payroll<
       }
 
       // Check for existing payroll
+      // ✅ Use employee._id (not employeeId param) since we've resolved the employee
       const existingQuery = payrollQuery()
-        .forEmployee(employeeId)
+        .forEmployee(employee._id)
         .forPeriod(month, year)
         .whereIn('status', ['paid', 'processing'])
         .build();
@@ -1089,37 +1296,38 @@ export class Payroll<
         processedBy: context?.userId ? toObjectId(context.userId) : undefined,
       }], session ? { session } : {}) as unknown as [TPayrollRecord & PayrollRecordDocument];
 
-      // ✅ UNIFIED TRANSACTION CREATION
+      // Aligned with @classytic/shared-types ITransactionCreateInput
       const [transaction] = await (this.models.TransactionModel as Model<AnyDocument>).create([{
         organizationId: employee.organizationId,
 
-        // ✅ UNIFIED: Use 'salary' as type directly
+        // Classification (shared-types)
         type: 'salary',
-        flow: 'outflow',  // Payroll transactions are expenses
+        flow: 'outflow',
         tags: ['recurring', 'payroll', 'monthly'],
-
-        // ✅ UNIFIED: Amount structure
-        amount: breakdown.grossSalary,  // Gross salary (before deductions)
-        currency: 'BDT',
-        fee: 0,  // No processing fees for payroll
-        tax: breakdown.taxAmount || 0,  // ✅ Income tax at top level (same field as revenue!)
-        net: breakdown.netSalary,  // Net after tax and deductions
-
-        // ✅ UNIFIED: Tax details
-        taxDetails: {
-          type: 'income_tax',
-          rate: breakdown.grossSalary > 0 ? (breakdown.taxAmount || 0) / breakdown.grossSalary : 0,
-          jurisdiction: 'BD'  // Bangladesh - could be dynamic
-        },
-
-        method: paymentMethod,
         status: 'completed',
+
+        // Amounts (shared-types convention: amount = gross, net = after deductions)
+        amount: breakdown.grossSalary, // Gross amount
+        net: breakdown.netSalary, // Net after deductions
+        currency: employee.compensation.currency || 'USD', // From employee, not hardcoded
+        fee: 0,
+        tax: breakdown.taxAmount || 0,
+
+        // Tax details (shared-types structure)
+        taxDetails: breakdown.taxAmount && breakdown.taxAmount > 0 ? {
+          type: 'income_tax',
+          rate: breakdown.grossSalary > 0 ? breakdown.taxAmount / breakdown.grossSalary : 0,
+          jurisdiction: undefined, // App-controlled (can be added via metadata)
+        } : undefined,
+
+        // Payment (flexible method - users can pass any string)
+        method: paymentMethod, // 'bank_transfer', 'cash', 'check', 'mobile_wallet', etc.
         date: paymentDate,
 
-        // Payroll-specific fields
+        // Parties (shared-types)
         employeeId: employee._id,
-        customerId: employee.userId as mongoose.Types.ObjectId,  // Employee's user ID
-        handledBy: context?.userId ? toObjectId(context.userId) : undefined,
+        customerId: employee.userId as mongoose.Types.ObjectId,
+        processedBy: context?.userId ? toObjectId(context.userId) : undefined,
 
         // ✅ UNIFIED: Breakdown structure
         breakdown: {
@@ -1147,16 +1355,23 @@ export class Payroll<
           } : undefined
         },
 
-        // ✅ UNIFIED: Source reference (links to PayrollRecord)
+        // References (shared-types)
         sourceId: payrollRecord._id,
         sourceModel: 'PayrollRecord',
 
+        // Idempotency (Stripe-style, shared-types)
+        idempotencyKey: idempotentKey,
+
+        // Timestamps (shared-types)
+        processedAt: paymentDate,
+        completedAt: paymentDate,
+
+        // Description & metadata
         description: `Salary payment - ${(employee.userId as { name?: string })?.name || employee.employeeId} (${month}/${year})`,
         notes: breakdown.proRatedAmount ? `Pro-rated: ${breakdown.actualDays}/${breakdown.workingDays} days` : undefined,
-
         metadata: {
           employeeId: employee.employeeId,
-          email: (employee as any).email,  // For guest employees
+          email: (employee as any).email, // For guest employees
           payrollRecordId: payrollRecord._id.toString(),
         },
       }], session ? { session } : {}) as unknown as [TTransaction & { _id: mongoose.Types.ObjectId }];
@@ -1166,6 +1381,35 @@ export class Payroll<
       (payrollRecord as PayrollRecordDocument).status = 'paid';
       (payrollRecord as PayrollRecordDocument).paidAt = paymentDate;
       await (payrollRecord as PayrollRecordDocument).save(session ? { session } : {});
+
+      // Create Tax Withholding Records (if tax > 0 and model provided)
+      if (breakdown.taxAmount && breakdown.taxAmount > 0 && this.models.TaxWithholdingModel) {
+        const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
+        const taxService = new TaxWithholdingService(
+          this.models.TaxWithholdingModel,
+          this.models.TransactionModel as any,
+          this._events
+        );
+
+        await taxService.createFromBreakdown({
+          organizationId: employee.organizationId,
+          employeeId: employee._id,
+          userId: employee.userId as mongoose.Types.ObjectId | undefined,
+          payrollRecordId: payrollRecord._id,
+          transactionId: transaction._id,
+          period: {
+            month,
+            year,
+            startDate: period.startDate,
+            endDate: period.endDate,
+            payDate: paymentDate,
+          },
+          breakdown,
+          currency: 'BDT',
+          session,
+          context,
+        });
+      }
 
       // Update employee payroll stats
       await this.updatePayrollStats(employee, breakdown.netSalary, paymentDate, session);
@@ -1198,13 +1442,19 @@ export class Payroll<
         month,
         year,
         amount: breakdown.netSalary,
+        idempotencyKey: idempotentKey,
       });
 
-      return {
+      const result = {
         payrollRecord: payrollRecord as unknown as TPayrollRecord,
         transaction: transaction as unknown as TTransaction,
         employee: employee as unknown as TEmployee,
       };
+
+      // Cache result for idempotency (Stripe-style)
+      this._idempotency.set(idempotentKey, result);
+
+      return result;
 
     } catch (error) {
       // Rollback transaction if we created it
@@ -1299,6 +1549,7 @@ export class Payroll<
     if (shouldStream) {
       return this.processBulkPayrollStreaming({
         query,
+        organizationId,
         month,
         year,
         paymentDate,
@@ -1361,6 +1612,7 @@ export class Payroll<
           try {
             const result = await this.processSalary({
               employeeId: employee._id,
+              organizationId,
               month,
               year,
               paymentDate,
@@ -1394,6 +1646,7 @@ export class Payroll<
           batch.map((employee) =>
             this.processSalary({
               employeeId: employee._id,
+              organizationId,
               month,
               year,
               paymentDate,
@@ -1472,6 +1725,7 @@ export class Payroll<
    */
   private async processBulkPayrollStreaming(params: {
     query: Record<string, unknown>;
+    organizationId: ObjectIdLike;
     month: number;
     year: number;
     paymentDate: Date;
@@ -1487,6 +1741,7 @@ export class Payroll<
   }): Promise<BulkPayrollResult> {
     const {
       query,
+      organizationId,
       month,
       year,
       paymentDate,
@@ -1550,6 +1805,7 @@ export class Payroll<
         try {
           const result = await this.processSalary({
             employeeId: employee._id,
+            organizationId,
             month,
             year,
             paymentDate,
@@ -1632,10 +1888,39 @@ export class Payroll<
    */
   async payrollHistory(params: PayrollHistoryParams): Promise<TPayrollRecord[]> {
     this.ensureInitialized();
-    const { employeeId, organizationId, month, year, status, pagination = {} } = params;
+    const { employeeId, employeeIdMode, organizationId, month, year, status, pagination = {} } = params;
+
+    // Resolve employeeId to ObjectId _id if it's a string business ID
+    // Respect explicit employeeIdMode hint before auto-detection
+    let resolvedEmployeeId: mongoose.Types.ObjectId | undefined;
+    if (employeeId) {
+      const mode = employeeIdMode || 'auto';
+      const shouldTreatAsObjectId =
+        mode === 'objectId' ||
+        (mode === 'auto' && isValidObjectId(employeeId));
+
+      const shouldTreatAsBusinessId =
+        mode === 'businessId' ||
+        (mode === 'auto' && !isValidObjectId(employeeId));
+
+      if (shouldTreatAsObjectId) {
+        resolvedEmployeeId = toObjectId(employeeId as ObjectIdLike);
+      } else if (shouldTreatAsBusinessId) {
+        // String business ID - need to resolve to ObjectId _id
+        if (!organizationId) {
+          throw new Error('payrollHistory requires organizationId when using string employeeId');
+        }
+        const employee = await findEmployeeSecure(this.models.EmployeeModel, {
+          employeeId,
+          employeeIdMode,
+          organizationId
+        });
+        resolvedEmployeeId = employee._id;
+      }
+    }
 
     let queryBuilder = payrollQuery();
-    if (employeeId) queryBuilder = queryBuilder.forEmployee(employeeId);
+    if (resolvedEmployeeId) queryBuilder = queryBuilder.forEmployee(resolvedEmployeeId);
     if (organizationId) queryBuilder = queryBuilder.forOrganization(organizationId);
     if (month || year) queryBuilder = queryBuilder.forPeriod(month, year);
     if (status) queryBuilder = queryBuilder.withStatus(status);
@@ -1733,15 +2018,75 @@ export class Payroll<
   }
 
   // ========================================
+  // Tax Withholding Methods
+  // ========================================
+
+  /**
+   * Get pending tax withholdings with optional filters
+   */
+  async getPendingTaxWithholdings(params: GetPendingTaxParams): Promise<TaxWithholdingDocument[]> {
+    this.ensureInitialized();
+
+    if (!this.models.TaxWithholdingModel) {
+      throw new Error('TaxWithholding model not provided. Please add TaxWithholdingModel to your models configuration.');
+    }
+
+    const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
+    const service = new TaxWithholdingService(this.models.TaxWithholdingModel);
+
+    return service.getPending(params);
+  }
+
+  /**
+   * Get tax summary aggregated by type, period, or employee
+   */
+  async getTaxSummary(params: TaxSummaryParams): Promise<TaxSummaryResult> {
+    this.ensureInitialized();
+
+    if (!this.models.TaxWithholdingModel) {
+      throw new Error('TaxWithholding model not provided. Please add TaxWithholdingModel to your models configuration.');
+    }
+
+    const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
+    const service = new TaxWithholdingService(this.models.TaxWithholdingModel);
+
+    return service.getSummary(params);
+  }
+
+  /**
+   * Mark tax withholdings as paid
+   *
+   * Updates status, optionally creates government payment transaction,
+   * and emits tax:paid event
+   */
+  async markTaxWithholdingsPaid(params: MarkTaxPaidParams): Promise<{
+    withholdings: TaxWithholdingDocument[];
+    transaction?: any;
+  }> {
+    this.ensureInitialized();
+
+    if (!this.models.TaxWithholdingModel) {
+      throw new Error('TaxWithholding model not provided. Please add TaxWithholdingModel to your models configuration.');
+    }
+
+    const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
+    const service = new TaxWithholdingService(
+      this.models.TaxWithholdingModel,
+      this.models.TransactionModel as any,
+      this._events
+    );
+
+    return service.markPaid(params);
+  }
+
+  // ========================================
   // Helper Methods
   // ========================================
 
   /**
-   * Calculate salary breakdown with proper handling for:
-   * - Effective dates on allowances/deductions
-   * - Pro-rating for mid-period hires AND terminations
-   * - Tax calculation
-   * - Working days vs calendar days for attendance
+   * Calculate salary breakdown
+   *
+   * Delegates to pure calculator for testability and reusability
    */
   private async calculateSalaryBreakdown(
     employee: EmployeeDocument,
@@ -1749,221 +2094,73 @@ export class Payroll<
     input: { attendance?: AttendanceInput | null; options?: PayrollProcessingOptions } = {},
     session?: ClientSession
   ): Promise<import('./types.js').PayrollBreakdown> {
-    const comp = employee.compensation;
-    const originalBaseAmount = comp.baseAmount;
-    let baseAmount = originalBaseAmount;
-
     const options = input.options || {};
+    let attendanceData = input.attendance;
 
-    // Work schedule: prefer operation override, then employee schedule, then Mon-Fri default
-    const workingDays =
-      options.workSchedule?.workingDays ||
-      employee.workSchedule?.workingDays ||
-      [1, 2, 3, 4, 5];
+    // Handle DB-based attendance lookup (if not provided and AttendanceModel exists)
+    if (!options.skipAttendance && this.config.payroll.attendanceIntegration && !attendanceData && this.models.AttendanceModel) {
+      // This is the ONLY non-pure part - fetch attendance from DB
+      const dbAttendance = await this.calculateAttendanceDeduction(
+        employee._id,
+        employee.organizationId,
+        period,
+        0, // We'll recalculate daily rate in the pure calculator
+        0, // We'll calculate expected days in the pure calculator
+        session
+      );
 
-    const holidays = options.holidays || [];
-    const workingDaysInPeriod = countWorkingDays(period.startDate, period.endDate, {
-      workingDays,
-      holidays,
-    }).workingDays;
-    
-    // Pro-rating calculation considering both hire date AND termination date
-    const proRating = options.skipProration
-      ? {
-          isProRated: false,
-          ratio: 1,
-          periodWorkingDays: workingDaysInPeriod,
-          effectiveWorkingDays: workingDaysInPeriod,
+      // Convert DB result to attendance data format
+      if (dbAttendance > 0) {
+        // We need to get actual working days from the attendance model
+        // For now, we'll keep the old behavior and let the pure calculator handle it
+        try {
+          let query = this.models.AttendanceModel.findOne({
+            tenantId: employee.organizationId,
+            targetId: employee._id,
+            targetModel: 'Employee',
+            year: period.year,
+            month: period.month,
+          });
+          if (session) query = query.session(session);
+
+          const attendance = await query;
+          if (attendance) {
+            const workedDays = (attendance as { totalWorkDays?: number }).totalWorkDays || 0;
+            attendanceData = {
+              expectedDays: 0, // Will be calculated by the pure calculator
+              actualDays: workedDays,
+            };
+          }
+        } catch (error) {
+          getLogger().warn('Failed to fetch attendance data', {
+            employeeId: employee._id.toString(),
+            error: (error as Error).message,
+          });
         }
-      : this.calculateProRatingAdvanced(
-      employee.hireDate,
-      employee.terminationDate || null,
-      period.startDate,
-      period.endDate,
-      workingDays,
-      holidays
-    );
-
-    if (proRating.isProRated && this.config.payroll.allowProRating) {
-      baseAmount = Math.round(baseAmount * proRating.ratio);
-    }
-
-    // Filter allowances by effective date (include both recurring and one-time)
-    const effectiveAllowances = (comp.allowances || [])
-      .filter((a) => isEffectiveForPeriod(a, period.startDate, period.endDate));
-
-    // Filter deductions by effective date
-    const effectiveDeductions = (comp.deductions || [])
-      .filter((d) => isEffectiveForPeriod(d, period.startDate, period.endDate))
-      .filter((d) => d.auto || d.recurring);
-
-    // Calculate actual amounts for allowances (handle percentage-based)
-    // Use ORIGINAL base for percentage calculations to avoid double pro-rating
-    const allowances = effectiveAllowances.map((a) => {
-      // Calculate from original base (percentage) or use fixed amount
-      let amount = a.isPercentage && a.value !== undefined
-        ? Math.round((originalBaseAmount * a.value) / 100)
-        : a.amount;
-
-      // Apply pro-rating ONCE if needed
-      if (proRating.isProRated && this.config.payroll.allowProRating) {
-        amount = Math.round(amount * proRating.ratio);
-      }
-
-      return {
-        type: a.type,
-        amount,
-        taxable: a.taxable ?? true,
-      };
-    });
-
-    // Calculate actual amounts for deductions (handle percentage-based)
-    // Use ORIGINAL base for percentage calculations to avoid double pro-rating
-    const deductions = effectiveDeductions.map((d) => {
-      // Calculate from original base (percentage) or use fixed amount
-      let amount = d.isPercentage && d.value !== undefined
-        ? Math.round((originalBaseAmount * d.value) / 100)
-        : d.amount;
-
-      // Apply pro-rating ONCE if needed
-      if (proRating.isProRated && this.config.payroll.allowProRating) {
-        amount = Math.round(amount * proRating.ratio);
-      }
-
-      return {
-        type: d.type,
-        amount,
-        description: d.description,
-      };
-    });
-
-    // Attendance deduction calculation (uses working days, not calendar days)
-    let attendanceDeduction = 0;
-    if (!options.skipAttendance && this.config.payroll.attendanceIntegration) {
-      // Expected working days depends on hire/termination range within this period.
-      const expectedDays = input.attendance?.expectedDays ?? proRating.effectiveWorkingDays;
-      const actualDays = input.attendance?.actualDays;
-
-      // Daily rate based on expected working days for THIS employee in THIS period.
-      const dailyRate = expectedDays > 0 ? baseAmount / expectedDays : 0;
-
-      if (input.attendance && actualDays !== undefined) {
-        const absentDays = Math.max(0, expectedDays - actualDays);
-        attendanceDeduction = Math.round(absentDays * dailyRate);
-      } else if (this.models.AttendanceModel) {
-        attendanceDeduction = await this.calculateAttendanceDeduction(
-          employee._id,
-          employee.organizationId,
-          period,
-          dailyRate,
-          expectedDays,
-          session
-        );
       }
     }
 
-    if (attendanceDeduction > 0) {
-      deductions.push({
-        type: 'absence',
-        amount: attendanceDeduction,
-        description: 'Unpaid leave deduction',
-      });
-    }
-
-    // Calculate gross salary
-    const grossSalary = calculateGross(baseAmount, allowances);
-    
-    // Calculate taxable amount (only taxable allowances)
-    const taxableAllowances = allowances.filter(a => a.taxable);
-    const taxableAmount = baseAmount + sumAllowances(taxableAllowances);
-    
-    // Calculate tax
-    let taxAmount = 0;
-    const currency = comp.currency || this.config.payroll.defaultCurrency;
+    const currency = employee.compensation.currency || this.config.payroll.defaultCurrency;
     const taxBrackets = TAX_BRACKETS[currency] || [];
 
-    if (!options.skipTax && taxBrackets.length > 0 && this.config.payroll.autoDeductions) {
-      // Annualize the taxable amount for tax bracket calculation
-      const annualTaxable = taxableAmount * 12;
-      const annualTax = applyTaxBrackets(annualTaxable, taxBrackets);
-      taxAmount = Math.round(annualTax / 12); // Monthly tax
-    }
-
-    // Add tax to deductions if applicable
-    if (taxAmount > 0) {
-      deductions.push({
-        type: 'tax',
-        amount: taxAmount,
-        description: 'Income tax',
-      });
-    }
-
-    // Calculate net salary
-    const netSalary = calculateNet(grossSalary, deductions);
-
-    return {
-      baseAmount,
-      allowances,
-      deductions,
-      grossSalary,
-      netSalary,
-      taxableAmount,
-      taxAmount,
-      workingDays: proRating.periodWorkingDays,
-      actualDays: proRating.effectiveWorkingDays,
-      proRatedAmount: proRating.isProRated ? baseAmount : 0,
-      attendanceDeduction,
-    };
-  }
-
-  /**
-   * Advanced pro-rating calculation that handles:
-   * - Mid-period hires
-   * - Mid-period terminations
-   * - Working days (not calendar days)
-   */
-  private calculateProRatingAdvanced(
-    hireDate: Date,
-    terminationDate: Date | null,
-    periodStart: Date,
-    periodEnd: Date,
-    workingDays: number[],
-    holidays: Date[] = []
-  ): {
-    isProRated: boolean;
-    ratio: number;
-    periodWorkingDays: number;
-    effectiveWorkingDays: number;
-  } {
-    const hire = new Date(hireDate);
-    const termination = terminationDate ? new Date(terminationDate) : null;
-
-    // Determine the actual start and end dates for this employee in this period
-    const effectiveStart = hire > periodStart ? hire : periodStart;
-    const effectiveEnd = termination && termination < periodEnd ? termination : periodEnd;
-
-    // If employee wasn't active during this period
-    if (effectiveStart > periodEnd || (termination && termination < periodStart)) {
-      const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workingDays, holidays }).workingDays;
-      return {
-        isProRated: true,
-        ratio: 0,
-        periodWorkingDays,
-        effectiveWorkingDays: 0,
-      };
-    }
-
-    const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workingDays, holidays }).workingDays;
-    const effectiveWorkingDays = countWorkingDays(effectiveStart, effectiveEnd, { workingDays, holidays }).workingDays;
-    const ratio = periodWorkingDays > 0 ? Math.min(1, Math.max(0, effectiveWorkingDays / periodWorkingDays)) : 0;
-    const isProRated = ratio < 1;
-
-    return {
-      isProRated,
-      ratio,
-      periodWorkingDays,
-      effectiveWorkingDays,
-    };
+    return calculateSalaryBreakdownPure({
+      employee: {
+        hireDate: employee.hireDate,
+        terminationDate: employee.terminationDate,
+        compensation: employee.compensation,
+        workSchedule: employee.workSchedule,
+      },
+      period,
+      attendance: attendanceData,
+      options,
+      config: {
+        allowProRating: this.config.payroll.allowProRating,
+        autoDeductions: this.config.payroll.autoDeductions,
+        defaultCurrency: this.config.payroll.defaultCurrency,
+        attendanceIntegration: this.config.payroll.attendanceIntegration,
+      },
+      taxBrackets,
+    });
   }
 
   /**
@@ -2061,11 +2258,15 @@ export interface ModelsConfig<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
   EmployeeModel: Model<TEmployee>;
   PayrollRecordModel: Model<TPayrollRecord>;
   TransactionModel: Model<TTransaction>;
   AttendanceModel?: Model<TAttendance> | null;
+  LeaveRequestModel?: Model<TLeaveRequest> | null;
+  TaxWithholdingModel?: Model<TTaxWithholding> | null;
 }
 
 /**
@@ -2095,8 +2296,10 @@ export class PayrollBuilder<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
-  private _models: ModelsConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance> | null = null;
+  private _models: ModelsConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding> | null = null;
   private _config: DeepPartial<HRMConfig> | undefined;
   private _singleTenant: SingleTenantConfig | null = null;
   private _logger: Logger | undefined;
@@ -2119,11 +2322,13 @@ export class PayrollBuilder<
     P extends PayrollRecordDocument,
     T extends AnyDocument,
     A extends AnyDocument = AnyDocument,
+    L extends LeaveRequestDocument = LeaveRequestDocument,
+    TW extends TaxWithholdingDocument = TaxWithholdingDocument,
   >(
-    models: ModelsConfig<E, P, T, A>
-  ): PayrollBuilder<E, P, T, A> {
+    models: ModelsConfig<E, P, T, A, L, TW>
+  ): PayrollBuilder<E, P, T, A, L, TW> {
     // Cast to new builder type with inferred generics
-    const builder = this as unknown as PayrollBuilder<E, P, T, A>;
+    const builder = this as unknown as PayrollBuilder<E, P, T, A, L, TW>;
     builder._models = models;
     return builder;
   }

@@ -16,3 +16,9 @@ export {
   type LeaveRequestModel,
 } from './leave-request.model.js';
 
+export {
+  taxWithholdingSchema,
+  getTaxWithholdingModel,
+  type TaxWithholdingModel,
+} from './tax-withholding.model.js';
+

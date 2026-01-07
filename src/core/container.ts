@@ -19,6 +19,8 @@ import type {
   EmployeeDocument,
   PayrollRecordDocument,
   AnyDocument,
+  LeaveRequestDocument,
+  TaxWithholdingDocument,
 } from '../types.js';
 import { getLogger } from '../utils/logger.js';
 import { HRM_CONFIG, mergeConfig } from '../config.js';
@@ -36,11 +38,15 @@ export interface ModelsContainer<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
   EmployeeModel: Model<TEmployee>;
   PayrollRecordModel: Model<TPayrollRecord>;
   TransactionModel: Model<TTransaction>;
   AttendanceModel?: Model<TAttendance> | null;
+  LeaveRequestModel?: Model<TLeaveRequest> | null;
+  TaxWithholdingModel?: Model<TTaxWithholding> | null;
 }
 
 /**
@@ -51,8 +57,10 @@ export interface ContainerConfig<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
-  models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
+  models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding>;
   config?: Partial<HRMConfig>;
   singleTenant?: SingleTenantConfig | null;
   logger?: Logger;
@@ -87,8 +95,10 @@ export class Container<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
-  private _models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance> | null = null;
+  private _models: ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding> | null = null;
   private _config: HRMConfig = HRM_CONFIG;
   private _singleTenant: SingleTenantConfig | null = null;
   private _logger: Logger;
@@ -102,7 +112,7 @@ export class Container<
    * Initialize container with configuration
    */
   initialize(
-    config: ContainerConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance>
+    config: ContainerConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding>
   ): void {
     if (this._initialized) {
       this._logger.warn('Container already initialized, re-initializing');
@@ -123,6 +133,8 @@ export class Container<
       hasPayrollRecordModel: !!this._models.PayrollRecordModel,
       hasTransactionModel: !!this._models.TransactionModel,
       hasAttendanceModel: !!this._models.AttendanceModel,
+      hasLeaveRequestModel: !!this._models.LeaveRequestModel,
+      hasTaxWithholdingModel: !!this._models.TaxWithholdingModel,
       isSingleTenant: !!this._singleTenant,
     });
   }
@@ -159,7 +171,7 @@ export class Container<
   /**
    * Get models container (strongly typed)
    */
-  getModels(): ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
+  getModels(): ModelsContainer<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding> {
     this.ensureInitialized();
     return this._models!;
   }
@@ -194,6 +206,22 @@ export class Container<
   getAttendanceModel(): Model<TAttendance> | null {
     this.ensureInitialized();
     return this._models!.AttendanceModel ?? null;
+  }
+
+  /**
+   * Get LeaveRequest model (optional, strongly typed)
+   */
+  getLeaveRequestModel(): Model<TLeaveRequest> | null {
+    this.ensureInitialized();
+    return this._models!.LeaveRequestModel ?? null;
+  }
+
+  /**
+   * Get TaxWithholding model (optional, strongly typed)
+   */
+  getTaxWithholdingModel(): Model<TTaxWithholding> | null {
+    this.ensureInitialized();
+    return this._models!.TaxWithholdingModel ?? null;
   }
 
   /**
@@ -299,8 +327,10 @@ export function createContainer<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
->(): Container<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
-  return new Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>();
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
+>(): Container<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding> {
+  return new Container<TEmployee, TPayrollRecord, TTransaction, TAttendance, TLeaveRequest, TTaxWithholding>();
 }
 
 // ============================================================================

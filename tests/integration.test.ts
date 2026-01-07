@@ -96,12 +96,13 @@ const transactionSchema = new Schema({
   flow: String,              // 'inflow' or 'outflow'
   tags: [String],
 
-  // ✅ UNIFIED: Amount structure
-  amount: Number,            // Gross amount
+  // ✅ UNIFIED: Amount structure (v3.0 semantic change)
+  grossAmount: Number,       // Gross amount (before deductions) - NEW in v3.0
+  amount: Number,            // Net amount (actual payment) - CHANGED from gross to net in v3.0
   currency: String,
   fee: { type: Number, default: 0 },
   tax: { type: Number, default: 0 },  // Top-level number
-  net: Number,               // Net = amount - fee - tax
+  net: Number,               // Deprecated: same as amount now
 
   // ✅ UNIFIED: Tax metadata (use Mixed to avoid conflicts with 'type' field)
   taxDetails: Schema.Types.Mixed,
@@ -242,6 +243,7 @@ describe('Payroll + Attendance Flow', () => {
     // Process payroll
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
       attendance,
@@ -255,10 +257,11 @@ describe('Payroll + Attendance Flow', () => {
     // 1 absent day ≈ 5238 deduction
     expect(result.payrollRecord.breakdown.attendanceDeduction).toBeCloseTo(5238, -2);
 
-    // Verify transaction created (UNIFIED STRUCTURE)
-    expect(result.transaction.amount).toBe(result.payrollRecord.breakdown.grossSalary); // ✅ Amount is gross
-    expect(result.transaction.net).toBe(result.payrollRecord.breakdown.netSalary); // ✅ Net is take-home
-    expect(result.transaction.type).toBe('salary'); // ✅ Changed from category
+    // Verify transaction created (aligned with @classytic/shared-types)
+    // amount = gross, net = after deductions (Stripe/shared-types convention)
+    expect(result.transaction.amount).toBe(result.payrollRecord.breakdown.grossSalary); // amount = gross
+    expect(result.transaction.net).toBe(result.payrollRecord.breakdown.netSalary); // net = after deductions
+    expect(result.transaction.type).toBe('salary');
   });
 
   it('should process payroll without attendance (no deduction)', async () => {
@@ -272,6 +275,7 @@ describe('Payroll + Attendance Flow', () => {
     // No attendance record = no deduction
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
@@ -350,6 +354,7 @@ describe('Pro-Rating with Attendance', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
@@ -403,6 +408,7 @@ describe('Pro-Rating with Attendance', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
@@ -414,8 +420,11 @@ describe('Pro-Rating with Attendance', () => {
 
 describe('Allowances and Deductions', () => {
   let payroll: any;
+  let org: mongoose.Types.ObjectId;
 
   beforeEach(async () => {
+    org = new mongoose.Types.ObjectId();
+
     payroll = createPayrollInstance()
       .withModels({
         EmployeeModel: Employee,
@@ -432,7 +441,7 @@ describe('Allowances and Deductions', () => {
 
     const employee = await payroll.hire({
       userId: userDoc._id,
-      organizationId: new mongoose.Types.ObjectId(),
+      organizationId: org,
       employment: {
         position: 'Engineer',
         department: 'it',
@@ -451,6 +460,7 @@ describe('Allowances and Deductions', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
@@ -555,6 +565,7 @@ describe('ClockIn → Payroll End-to-End Flow', () => {
     // 4. Process payroll with attendance
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 4,
       year: 2024,
       attendance,
@@ -609,6 +620,7 @@ describe('ClockIn → Payroll End-to-End Flow', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 4,
       year: 2024,
       attendance,
@@ -709,6 +721,7 @@ describe('Termination Scenarios', () => {
     // Process salary - should prorate based on terminationDate
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
@@ -737,6 +750,7 @@ describe('Termination Scenarios', () => {
     // Terminated in February
     await payroll.terminate({
       employeeId: employee._id,
+      organizationId: org,
       terminationDate: new Date('2024-02-28'),
       reason: 'contract_end',
     });
@@ -745,6 +759,7 @@ describe('Termination Scenarios', () => {
     await expect(
       payroll.processSalary({
         employeeId: employee._id,
+      organizationId: org,
         month: 3,
         year: 2024,
       })
@@ -768,7 +783,7 @@ describe('Single-Tenant Mode', () => {
         TransactionModel: Transaction,
         AttendanceModel: Attendance,
       })
-      .forSingleTenant({ organizationId: defaultOrgId })
+      .forSingleTenant({ organizationId: defaultOrgId, autoInject: true })
       .build();
 
     // Hire without explicitly specifying organizationId - it should be auto-injected
@@ -821,7 +836,7 @@ describe('Validation & Error Scenarios', () => {
       .build();
   });
 
-  it('should reject duplicate payroll for same period', async () => {
+  it('should handle duplicate payroll idempotently (Stripe-style)', async () => {
     const userDoc = await User.create({ name: 'Dup Test', email: 'dup@example.com' });
 
     const employee = await payroll.hire({
@@ -837,20 +852,31 @@ describe('Validation & Error Scenarios', () => {
     });
 
     // First payroll - should succeed
-    await payroll.processSalary({
+    const result1 = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 3,
       year: 2024,
     });
 
-    // Second payroll for same period - should fail
-    await expect(
-      payroll.processSalary({
-        employeeId: employee._id,
-        month: 3,
-        year: 2024,
-      })
-    ).rejects.toThrow(/duplicate|already.*processed|exists/i);
+    // Second payroll for same period - should return cached result (idempotent)
+    const result2 = await payroll.processSalary({
+      employeeId: employee._id,
+      organizationId: org,
+      month: 3,
+      year: 2024,
+    });
+
+    // Should return the SAME result (Stripe-style idempotency)
+    expect(result2.payrollRecord._id.toString()).toBe(result1.payrollRecord._id.toString());
+    expect(result2.transaction._id.toString()).toBe(result1.transaction._id.toString());
+
+    // Should NOT create duplicate records
+    const payrollCount = await PayrollRecord.countDocuments({ employeeId: employee._id });
+    const transactionCount = await Transaction.countDocuments({ employeeId: employee._id });
+
+    expect(payrollCount).toBe(1);
+    expect(transactionCount).toBe(1);
   });
 
   it('should reject processing for non-existent employee', async () => {
@@ -859,6 +885,7 @@ describe('Validation & Error Scenarios', () => {
     await expect(
       payroll.processSalary({
         employeeId: fakeEmployeeId,
+      organizationId: org,
         month: 3,
         year: 2024,
       })
@@ -886,6 +913,7 @@ describe('Validation & Error Scenarios', () => {
     await expect(
       payroll.processSalary({
         employeeId: employee._id,
+      organizationId: org,
         month: 3,
         year: 2024,
       })
@@ -918,6 +946,7 @@ describe('Validation & Error Scenarios', () => {
       await expect(
         payroll.processSalary({
           employeeId: employee._id,
+      organizationId: org,
           month: 3,
           year: 2024,
         })
@@ -993,6 +1022,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 4,
       year: 2024,
       attendance,
@@ -1048,6 +1078,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 4,
       year: 2024,
       attendance,
@@ -1101,6 +1132,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     const result = await payroll.processSalary({
       employeeId: employee._id,
+      organizationId: org,
       month: 4,
       year: 2024,
       attendance,

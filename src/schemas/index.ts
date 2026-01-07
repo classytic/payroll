@@ -18,6 +18,7 @@ import {
   PAYMENT_METHOD_VALUES,
 } from '../enums.js';
 import { HRM_CONFIG } from '../config.js';
+import { periodSchema } from './common.js';
 
 // ============================================================================
 // Sub-Schemas
@@ -242,18 +243,10 @@ export const payrollBreakdownSchema = new Schema(
 );
 
 /**
- * Payroll period schema
+ * Payroll period schema (imported from common to avoid circular dependencies)
+ * Re-exported for external use
  */
-export const periodSchema = new Schema(
-  {
-    month: { type: Number, required: true, min: 1, max: 12 },
-    year: { type: Number, required: true, min: 2020 },
-    startDate: { type: Date, required: true },
-    endDate: { type: Date, required: true },
-    payDate: { type: Date, required: true },
-  },
-  { _id: false }
-);
+export { periodSchema };
 
 /**
  * Payroll record fields to spread into PayrollRecord schema
@@ -481,6 +474,17 @@ export {
   applyLeaveRequestIndexes,
   createLeaveRequestSchema,
 } from './leave.js';
+
+// ============================================================================
+// Tax Withholding Schemas
+// ============================================================================
+
+export {
+  taxWithholdingFields,
+  taxWithholdingIndexes,
+  applyTaxWithholdingIndexes,
+  createTaxWithholdingSchema,
+} from './tax-withholding.js';
 
 // ============================================================================
 // Default Export

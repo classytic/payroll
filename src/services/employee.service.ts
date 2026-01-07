@@ -2,6 +2,20 @@
  * @classytic/payroll - Employee Service
  *
  * High-level employee operations with dependency injection
+ *
+ * ⚠️ **INTERNAL USE ONLY**
+ *
+ * This service is for internal use by the Payroll class only.
+ * All methods enforce organizationId isolation for multi-tenant safety.
+ *
+ * **For application code:**
+ * - Use `Payroll` class methods (recommended, full orchestration)
+ * - Use `findEmployeeSecure()` utility for secure lookups
+ * - Do NOT use EmployeeService directly
+ *
+ * This service is intentionally not exported from the package.
+ *
+ * @internal
  */
 
 import type { Model, ClientSession } from 'mongoose';
@@ -36,23 +50,34 @@ export class EmployeeService {
   }
 
   /**
-   * Find employee by ID
+   * Find employee by ID with organization validation
+   * 
+   * ⚠️ SECURITY: Always validates employee belongs to specified organization
+   * 
+   * @throws {Error} If employee not found or doesn't belong to organization
    */
   async findById(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession; populate?: boolean } = {}
   ): Promise<EmployeeDocument | null> {
-    let query = this.EmployeeModel.findById(toObjectId(employeeId));
+    // Build secure query that enforces org isolation
+    const query = {
+      _id: toObjectId(employeeId),
+      organizationId: toObjectId(organizationId),
+    };
+
+    let mongooseQuery = this.EmployeeModel.findOne(query);
     
     if (options.session) {
-      query = query.session(options.session);
+      mongooseQuery = mongooseQuery.session(options.session);
     }
     
     if (options.populate) {
-      query = query.populate('userId', 'name email phone');
+      mongooseQuery = mongooseQuery.populate('userId', 'name email phone');
     }
     
-    return query.exec();
+    return mongooseQuery.exec();
   }
 
   /**
@@ -289,17 +314,20 @@ export class EmployeeService {
   }
 
   /**
-   * Update employee status
+   * Update employee status with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async updateStatus(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     status: EmployeeStatus,
     context: OperationContext = {},
     options: { session?: ClientSession } = {}
   ): Promise<EmployeeDocument> {
-    const employee = await this.findById(employeeId, options);
+    const employee = await this.findById(employeeId, organizationId, options);
     if (!employee) {
-      throw new Error('Employee not found');
+      throw new Error(`Employee not found in organization ${organizationId}`);
     }
 
     employee.status = status;
@@ -307,6 +335,7 @@ export class EmployeeService {
 
     logger.info('Employee status updated', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       newStatus: status,
     });
 
@@ -314,20 +343,23 @@ export class EmployeeService {
   }
 
   /**
-   * Update employee compensation
+   * Update employee compensation with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    * 
    * NOTE: This merges the compensation fields rather than replacing the entire object.
    * To update allowances/deductions, use addAllowance/removeAllowance methods.
    */
   async updateCompensation(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     compensation: Partial<Compensation>,
     options: { session?: ClientSession } = {}
   ): Promise<EmployeeDocument> {
-    // First fetch the employee to get current compensation
-    const currentEmployee = await this.EmployeeModel.findById(toObjectId(employeeId)).session(options.session || null);
+    // First verify employee belongs to organization
+    const currentEmployee = await this.findById(employeeId, organizationId, options);
     if (!currentEmployee) {
-      throw new Error('Employee not found');
+      throw new Error(`Employee not found in organization ${organizationId}`);
     }
 
     // Build update object that only sets provided fields
@@ -351,15 +383,26 @@ export class EmployeeService {
     // Note: allowances and deductions should NOT be updated here
     // Use addAllowance/removeAllowance methods instead
 
-    const employee = await this.EmployeeModel.findByIdAndUpdate(
-      toObjectId(employeeId),
+    // Use secure query with org filter
+    const query = {
+      _id: toObjectId(employeeId),
+      organizationId: toObjectId(organizationId),
+    };
+
+    const employee = await this.EmployeeModel.findOneAndUpdate(
+      query,
       { $set: updateFields },
       { new: true, runValidators: true, session: options.session }
     );
 
     if (!employee) {
-      throw new Error('Employee not found');
+      throw new Error(`Employee not found in organization ${organizationId}`);
     }
+
+    logger.info('Employee compensation updated', {
+      employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
+    });
 
     return employee;
   }

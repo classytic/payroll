@@ -322,9 +322,14 @@ export class PayrollQueryBuilder extends QueryBuilder {
 
   /**
    * Filter by employee
+   *
+   * Note: PayrollRecord.employeeId is always ObjectId _id
+   * If passing a string business ID, resolve to _id first
    */
-  forEmployee(employeeId: ObjectIdLike): this {
-    return this.where('employeeId', toObjectId(employeeId));
+  forEmployee(employeeId: ObjectIdLike | string): this {
+    // For payroll queries, employeeId field is always the ObjectId _id
+    // If a string business ID is passed, caller should resolve to _id first
+    return this.where('employeeId', toObjectId(employeeId as ObjectIdLike));
   }
 
   /**

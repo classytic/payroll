@@ -547,6 +547,111 @@ export interface OperationContext {
   session?: ClientSession;
 }
 
+/**
+ * Base parameters for all employee operations
+ * Enforces multi-tenant isolation and supports dual identity
+ */
+/**
+ * Employee ID resolution mode
+ * 
+ * @example
+ * // Auto-detect (recommended)
+ * { employeeId: 'EMP-001' } // Treated as business ID
+ * 
+ * @example
+ * // Force business ID (for 24-hex IDs that look like ObjectId)
+ * { employeeId: '000000000000000000000001', employeeIdMode: 'businessId' }
+ * 
+ * @example
+ * // Force ObjectId lookup
+ * { employeeId: employee._id, employeeIdMode: 'objectId' }
+ */
+export type EmployeeIdMode = 'auto' | 'objectId' | 'businessId';
+
+export interface EmployeeOperationParams {
+  /**
+   * Employee identifier (supports both formats):
+   * - ObjectId: employee._id (MongoDB document ID)
+   * - String: "EMP-001" (business identifier)
+   */
+  employeeId: ObjectIdLike | string;
+
+  /**
+   * How to interpret employeeId (explicit control for edge cases)
+   * 
+   * @default 'auto' - Smart detection
+   *
+   * Explicit mode hint for employeeId disambiguation
+   *
+   * - 'auto' (default): Auto-detect via isValidObjectId()
+   * - 'objectId': Force treat as MongoDB _id (ObjectId)
+   * - 'businessId': Force treat as business employeeId string
+   *
+   * Use 'businessId' if your employeeIds are 24-hex strings like
+   * "507f1f77bcf86cd799439011" to prevent ObjectId collision.
+   *
+   * @default 'auto'
+   * @since v2.3.0
+   *
+   * @example
+   * // Force treat as business ID (prevents ObjectId collision)
+   * await payroll.processSalary({
+   *   employeeId: "507f1f77bcf86cd799439011",
+   *   employeeIdMode: 'businessId',
+   *   organizationId: org._id,
+   *   month: 3, year: 2024
+   * });
+   */
+  employeeIdMode?: EmployeeIdMode;
+
+  /**
+   * Organization ID for multi-tenant isolation
+   *
+   * **Multi-tenant mode:** REQUIRED (enforced at runtime)
+   * **Single-tenant mode:** Optional (auto-injected if autoInject=true)
+   *
+   * **Resolution Priority:**
+   * 1. This explicit value (highest)
+   * 2. context.organizationId (from middleware/auth)
+   * 3. Single-tenant config (if autoInject enabled)
+   * 4. Error thrown (if none found in multi-tenant mode)
+   *
+   * @example
+   * // Multi-tenant: explicit organizationId
+   * await payroll.processSalary({
+   *   employeeId: emp._id,
+   *   organizationId: org._id,  // Required
+   *   month: 3, year: 2024
+   * });
+   *
+   * @example
+   * // Multi-tenant: via context
+   * await payroll.processSalary({
+   *   employeeId: emp._id,
+   *   month: 3, year: 2024,
+   *   context: { organizationId: org._id }  // From middleware
+   * });
+   *
+   * @example
+   * // Single-tenant: auto-injected
+   * const payroll = createPayrollInstance()
+   *   .forSingleTenant({ organizationId: myOrg._id, autoInject: true })
+   *   .build();
+   *
+   * await payroll.processSalary({
+   *   employeeId: emp._id,
+   *   // organizationId auto-injected ✨
+   *   month: 3, year: 2024
+   * });
+   */
+  organizationId?: ObjectIdLike;
+
+  /**
+   * Operation context (auth, session, metadata)
+   */
+  context?: OperationContext;
+}
+
 /** Hire employee parameters */
 export interface HireEmployeeParams {
   /** User ID (optional - for guest employees without user account) */
@@ -580,9 +685,7 @@ export interface HireEmployeeParams {
 }
 
 /** Update employment parameters */
-export interface UpdateEmploymentParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface UpdateEmploymentParams extends EmployeeOperationParams {
   /** Fields to update */
   updates: {
     department?: Department;
@@ -591,28 +694,20 @@ export interface UpdateEmploymentParams {
     status?: EmployeeStatus;
     workSchedule?: WorkSchedule;
   };
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Terminate employee parameters */
-export interface TerminateEmployeeParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface TerminateEmployeeParams extends EmployeeOperationParams {
   /** Termination date */
   terminationDate?: Date;
   /** Termination reason */
   reason?: TerminationReason;
   /** Notes */
   notes?: string;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Re-hire employee parameters */
-export interface ReHireEmployeeParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface ReHireEmployeeParams extends EmployeeOperationParams {
   /** New hire date */
   hireDate?: Date;
   /** New position */
@@ -621,8 +716,6 @@ export interface ReHireEmployeeParams {
   department?: Department;
   /** New compensation */
   compensation?: DeepPartial<Compensation>;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** List employees parameters */
@@ -646,9 +739,7 @@ export interface ListEmployeesParams {
 }
 
 /** Update salary parameters */
-export interface UpdateSalaryParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface UpdateSalaryParams extends EmployeeOperationParams {
   /** Compensation updates */
   compensation: {
     baseAmount?: number;
@@ -657,14 +748,10 @@ export interface UpdateSalaryParams {
   };
   /** Effective from date */
   effectiveFrom?: Date;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Add allowance parameters */
-export interface AddAllowanceParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface AddAllowanceParams extends EmployeeOperationParams {
   /** Allowance type */
   type: AllowanceType;
   /** Amount (fixed or ignored if isPercentage is true) */
@@ -681,24 +768,16 @@ export interface AddAllowanceParams {
   effectiveFrom?: Date;
   /** Effective to */
   effectiveTo?: Date | null;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Remove allowance parameters */
-export interface RemoveAllowanceParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface RemoveAllowanceParams extends EmployeeOperationParams {
   /** Allowance type to remove */
   type: AllowanceType;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Add deduction parameters */
-export interface AddDeductionParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface AddDeductionParams extends EmployeeOperationParams {
   /** Deduction type */
   type: DeductionType;
   /** Amount (fixed or ignored if isPercentage is true) */
@@ -717,34 +796,22 @@ export interface AddDeductionParams {
   effectiveFrom?: Date;
   /** Effective to */
   effectiveTo?: Date | null;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Remove deduction parameters */
-export interface RemoveDeductionParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface RemoveDeductionParams extends EmployeeOperationParams {
   /** Deduction type to remove */
   type: DeductionType;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Update bank details parameters */
-export interface UpdateBankDetailsParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface UpdateBankDetailsParams extends EmployeeOperationParams {
   /** Bank details */
   bankDetails: BankDetails;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Process salary parameters */
-export interface ProcessSalaryParams {
-  /** Employee document ID */
-  employeeId: ObjectIdLike;
+export interface ProcessSalaryParams extends EmployeeOperationParams {
   /** Month (1-12) */
   month: number;
   /** Year */
@@ -753,6 +820,12 @@ export interface ProcessSalaryParams {
   paymentDate?: Date;
   /** Payment method */
   paymentMethod?: PaymentMethod;
+  /**
+   * Idempotency key (Stripe-style)
+   * If provided, duplicate calls with same key return cached result
+   * Auto-generated if not provided: `payroll:{orgId}:{empId}:{year}-{month}`
+   */
+  idempotencyKey?: string;
   /**
    * Optional attendance override (useful when embedding into any HRM system).
    * If provided, payroll will use this instead of querying AttendanceModel.
@@ -763,8 +836,6 @@ export interface ProcessSalaryParams {
    * This aligns with the pure functions in `@classytic/payroll/core`.
    */
   options?: PayrollProcessingOptions;
-  /** Operation context */
-  context?: OperationContext;
 }
 
 /** Bulk payroll progress information */
@@ -849,8 +920,10 @@ export interface ProcessBulkPayrollParams {
 
 /** Payroll history parameters */
 export interface PayrollHistoryParams {
-  /** Employee document ID */
-  employeeId?: ObjectIdLike;
+  /** Employee identifier (ObjectId _id or string business ID like "EMP-001") */
+  employeeId?: ObjectIdLike | string;
+  /** Explicit mode hint for employeeId disambiguation @since v2.3.0 */
+  employeeIdMode?: EmployeeIdMode;
   /** Organization ID */
   organizationId?: ObjectIdLike;
   /** Month filter */
@@ -973,6 +1046,15 @@ export interface PayrollInstance<
     event: K,
     handler: (payload: PayrollEventMap[K]) => void | Promise<void>
   ): () => void;
+
+  /** Register webhook (Stripe-style) */
+  registerWebhook(config: import('./core/webhooks.js').WebhookConfig): void;
+
+  /** Unregister webhook */
+  unregisterWebhook(url: string): void;
+
+  /** Get webhook delivery log */
+  getWebhookDeliveries(options?: { event?: PayrollEventType; status?: 'pending' | 'sent' | 'failed'; limit?: number }): import('./core/webhooks.js').WebhookDelivery[];
 
   // ========================================
   // Employment Lifecycle
@@ -1320,4 +1402,104 @@ export interface WorkingDaysOptions {
   holidays?: Date[];
   /** Include end date in calculation (default: true) */
   includeEndDate?: boolean;
+}
+
+// ============================================================================
+// Tax Withholding Types
+// ============================================================================
+
+/** Tax types supported by the system */
+export type TaxType =
+  | 'income_tax'
+  | 'social_security'
+  | 'health_insurance'
+  | 'pension'
+  | 'employment_insurance'
+  | 'local_tax'
+  | 'other';
+
+/** Tax withholding status */
+export type TaxStatus = 'pending' | 'submitted' | 'paid';
+
+/** Tax withholding document */
+export interface TaxWithholdingDocument extends Document {
+  _id: ObjectId;
+  organizationId: ObjectId;
+  employeeId: ObjectId;
+  userId?: ObjectId;
+  payrollRecordId: ObjectId;
+  transactionId: ObjectId;
+
+  period: PayrollPeriod;
+
+  amount: number;
+  currency: string;
+
+  taxType: TaxType;
+  taxRate: number;
+  taxableAmount: number;
+
+  status: TaxStatus;
+
+  submittedAt?: Date;
+  paidAt?: Date;
+  governmentTransactionId?: ObjectId;
+  referenceNumber?: string;
+
+  notes?: string;
+  metadata?: Record<string, unknown>;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+
+  // Instance methods
+  markAsSubmitted(submittedAt?: Date): void;
+  markAsPaid(transactionId?: ObjectId, referenceNumber?: string, paidAt?: Date): void;
+
+  save(options?: { session?: ClientSession }): Promise<this>;
+  toObject(): Record<string, unknown>;
+}
+
+/** Parameters for querying pending tax withholdings */
+export interface GetPendingTaxParams {
+  organizationId: ObjectIdLike;
+  fromPeriod?: { month: number; year: number };
+  toPeriod?: { month: number; year: number };
+  taxType?: TaxType;
+  employeeId?: ObjectIdLike;
+}
+
+/** Parameters for tax summary aggregation */
+export interface TaxSummaryParams {
+  organizationId: ObjectIdLike;
+  fromPeriod: { month: number; year: number };
+  toPeriod: { month: number; year: number };
+  groupBy?: 'type' | 'period' | 'employee';
+}
+
+/** Tax summary grouped by type */
+export interface TaxSummaryByType {
+  taxType: TaxType;
+  totalAmount: number;
+  count: number;
+  withholdingIds: ObjectId[];
+}
+
+/** Tax summary result */
+export interface TaxSummaryResult {
+  totalAmount: number;
+  count: number;
+  byType: TaxSummaryByType[];
+  period: { fromMonth: number; fromYear: number; toMonth: number; toYear: number };
+}
+
+/** Parameters for marking tax withholdings as paid */
+export interface MarkTaxPaidParams {
+  organizationId: ObjectIdLike;
+  withholdingIds: ObjectIdLike[];
+  createTransaction?: boolean;
+  referenceNumber?: string;
+  paidAt?: Date;
+  notes?: string;
+  context?: OperationContext;
 }

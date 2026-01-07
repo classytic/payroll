@@ -165,7 +165,9 @@ export class PayrollService {
   }
 
   /**
-   * Generate payroll for employee
+   * Generate payroll for employee with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization
    */
   async generateForEmployee(
     employeeId: ObjectIdLike,
@@ -174,9 +176,10 @@ export class PayrollService {
     year: number,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    const employee = await this.employeeService.findById(employeeId, options);
+    // Use secure findById with org validation
+    const employee = await this.employeeService.findById(employeeId, organizationId, options);
     if (!employee) {
-      throw new Error('Employee not found');
+      throw new Error(`Employee not found in organization ${organizationId}`);
     }
 
     if (!canReceiveSalary(employee)) {
@@ -291,10 +294,13 @@ export class PayrollService {
   }
 
   /**
-   * Mark payroll as paid
+   * Mark payroll as paid with organization validation
+   * 
+   * ⚠️ SECURITY: Validates payroll belongs to organization
    */
   async markAsPaid(
     payrollId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     paymentDetails: {
       paidAt?: Date;
       transactionId?: ObjectIdLike;
@@ -302,9 +308,20 @@ export class PayrollService {
     } = {},
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    const payroll = await this.findById(payrollId, options);
+    // Verify payroll belongs to organization
+    const query = {
+      _id: toObjectId(payrollId),
+      organizationId: toObjectId(organizationId),
+    };
+
+    let payrollFindQuery = this.PayrollModel.findOne(query);
+    if (options.session) {
+      payrollFindQuery = payrollFindQuery.session(options.session);
+    }
+    
+    const payroll = await payrollFindQuery;
     if (!payroll) {
-      throw new Error('Payroll not found');
+      throw new Error(`Payroll not found in organization ${organizationId}`);
     }
 
     if (payroll.status === 'paid') {
@@ -337,15 +354,29 @@ export class PayrollService {
   }
 
   /**
-   * Mark payroll as processed
+   * Mark payroll as processed with organization validation
+   * 
+   * ⚠️ SECURITY: Validates payroll belongs to organization
    */
   async markAsProcessed(
     payrollId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    const payroll = await this.findById(payrollId, options);
+    // Verify payroll belongs to organization
+    const query = {
+      _id: toObjectId(payrollId),
+      organizationId: toObjectId(organizationId),
+    };
+
+    let payrollFindQuery = this.PayrollModel.findOne(query);
+    if (options.session) {
+      payrollFindQuery = payrollFindQuery.session(options.session);
+    }
+    
+    const payroll = await payrollFindQuery;
     if (!payroll) {
-      throw new Error('Payroll not found');
+      throw new Error(`Payroll not found in organization ${organizationId}`);
     }
 
     const payrollObj = payroll.toObject() as { status: string; processedAt: Date | null };

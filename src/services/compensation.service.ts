@@ -29,47 +29,46 @@ export class CompensationService {
   constructor(private readonly EmployeeModel: Model<EmployeeDocument>) {}
 
   /**
-   * Get employee compensation
+   * Get employee compensation with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization
    */
   async getEmployeeCompensation(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession } = {}
   ): Promise<Compensation> {
-    let query = this.EmployeeModel.findById(toObjectId(employeeId));
-    
-    if (options.session) {
-      query = query.session(options.session);
-    }
-    
-    const employee = await query.exec();
-    if (!employee) {
-      throw new Error('Employee not found');
-    }
-
+    const employee = await this.findEmployee(employeeId, organizationId, options);
     return employee.compensation;
   }
 
   /**
-   * Calculate compensation breakdown
+   * Calculate compensation breakdown with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization
    */
   async calculateBreakdown(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const compensation = await this.getEmployeeCompensation(employeeId, options);
+    const compensation = await this.getEmployeeCompensation(employeeId, organizationId, options);
     return CompensationFactory.calculateBreakdown(compensation);
   }
 
   /**
-   * Update base amount
+   * Update base amount with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async updateBaseAmount(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     newAmount: number,
     effectiveFrom = new Date(),
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     const updatedCompensation = CompensationFactory.updateBaseAmount(
       employee.compensation,
@@ -82,21 +81,25 @@ export class CompensationService {
 
     logger.info('Compensation base amount updated', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       newAmount,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Apply salary increment
+   * Apply salary increment with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async applyIncrement(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     params: { percentage?: number; amount?: number; effectiveFrom?: Date },
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
     const previousAmount = employee.compensation.baseAmount;
 
     const updatedCompensation = CompensationFactory.applyIncrement(
@@ -109,19 +112,23 @@ export class CompensationService {
 
     logger.info('Salary increment applied', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       previousAmount,
       newAmount: updatedCompensation.baseAmount,
       percentage: params.percentage,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Add allowance
+   * Add allowance with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async addAllowance(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     allowance: {
       type: Allowance['type'];
       value: number;
@@ -131,7 +138,7 @@ export class CompensationService {
     },
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     const updatedCompensation = CompensationFactory.addAllowance(
       employee.compensation,
@@ -143,22 +150,26 @@ export class CompensationService {
 
     logger.info('Allowance added', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       type: allowance.type,
       value: allowance.value,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Remove allowance
+   * Remove allowance with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async removeAllowance(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     allowanceType: Allowance['type'],
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     const updatedCompensation = CompensationFactory.removeAllowance(
       employee.compensation,
@@ -170,17 +181,21 @@ export class CompensationService {
 
     logger.info('Allowance removed', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       type: allowanceType,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Add deduction
+   * Add deduction with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async addDeduction(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     deduction: {
       type: Deduction['type'];
       value: number;
@@ -190,7 +205,7 @@ export class CompensationService {
     },
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     const updatedCompensation = CompensationFactory.addDeduction(
       employee.compensation,
@@ -202,22 +217,26 @@ export class CompensationService {
 
     logger.info('Deduction added', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       type: deduction.type,
       value: deduction.value,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Remove deduction
+   * Remove deduction with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async removeDeduction(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     deductionType: Deduction['type'],
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     const updatedCompensation = CompensationFactory.removeDeduction(
       employee.compensation,
@@ -229,39 +248,47 @@ export class CompensationService {
 
     logger.info('Deduction removed', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       type: deductionType,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
-   * Set standard compensation
+   * Set standard compensation with organization validation
+   * 
+   * ⚠️ SECURITY: Validates employee belongs to organization before update
    */
   async setStandardCompensation(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     baseAmount: number,
     options: { session?: ClientSession } = {}
   ): Promise<CompensationBreakdownResult> {
-    const employee = await this.findEmployee(employeeId, options);
+    const employee = await this.findEmployee(employeeId, organizationId, options);
 
     employee.compensation = CompensationPresets.standard(baseAmount);
     await employee.save({ session: options.session });
 
     logger.info('Standard compensation set', {
       employeeId: employee.employeeId,
+      organizationId: organizationId.toString(),
       baseAmount,
     });
 
-    return this.calculateBreakdown(employeeId, options);
+    return this.calculateBreakdown(employeeId, organizationId, options);
   }
 
   /**
    * Compare compensation between two employees
+   * 
+   * ⚠️ SECURITY: Validates both employees belong to organization
    */
   async compareCompensation(
     employeeId1: ObjectIdLike,
     employeeId2: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession } = {}
   ): Promise<{
     employee1: CompensationBreakdownResult;
@@ -269,8 +296,8 @@ export class CompensationService {
     difference: { base: number; gross: number; net: number };
     ratio: { base: number; gross: number; net: number };
   }> {
-    const breakdown1 = await this.calculateBreakdown(employeeId1, options);
-    const breakdown2 = await this.calculateBreakdown(employeeId2, options);
+    const breakdown1 = await this.calculateBreakdown(employeeId1, organizationId, options);
+    const breakdown2 = await this.calculateBreakdown(employeeId2, organizationId, options);
 
     return {
       employee1: breakdown1,
@@ -405,21 +432,30 @@ export class CompensationService {
   }
 
   /**
-   * Find employee helper
+   * Find employee helper with organization validation
+   * 
+   * ⚠️ SECURITY: Always validates employee belongs to organization
    */
   private async findEmployee(
     employeeId: ObjectIdLike,
+    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
     options: { session?: ClientSession } = {}
   ): Promise<EmployeeDocument> {
-    let query = this.EmployeeModel.findById(toObjectId(employeeId));
+    // Build secure query that enforces org isolation
+    const query = {
+      _id: toObjectId(employeeId),
+      organizationId: toObjectId(organizationId),
+    };
+
+    let mongooseQuery = this.EmployeeModel.findOne(query);
     
     if (options.session) {
-      query = query.session(options.session);
+      mongooseQuery = mongooseQuery.session(options.session);
     }
     
-    const employee = await query.exec();
+    const employee = await mongooseQuery.exec();
     if (!employee) {
-      throw new Error('Employee not found');
+      throw new Error(`Employee not found in organization ${organizationId}`);
     }
     return employee;
   }

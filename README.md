@@ -11,7 +11,7 @@ Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 | Feature | Description | Status |
 |---------|-------------|--------|
 | **Employee Management** | Hire, terminate, re-hire, update employment | ✅ Production-ready |
-| **Guest Employee Identity** | Employees without userId, flexible identity lookups | ✅ **NEW** Production-ready |
+| **Guest Employee Identity** | Employees without userId, flexible identity lookups | ✅ Production-ready |
 | **Compensation** | Base salary, allowances, deductions, bank details | ✅ Production-ready |
 | **Payroll Processing** | Monthly salary with automatic calculations | ✅ Production-ready |
 | **Shift Compliance** | Late penalties, overtime bonuses, progressive discipline | ✅ Production-ready |
@@ -19,13 +19,14 @@ Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 | **Streaming Mode** | Cursor-based processing for millions (auto-detect) | ✅ Production-ready |
 | **Attendance Integration** | Native `@classytic/clockin` support for absences | ✅ Production-ready |
 | **Leave Management** | Balances, requests, approvals, payroll integration | ✅ Production-ready |
+| **Tax Withholding** | Track government tax liability, query pending taxes | ✅ Production-ready |
 | **Pro-rating** | Mid-month hires, terminations, attendance | ✅ Production-ready |
 | **Tax Calculation** | Progressive tax brackets | ✅ Production-ready |
 | **Holidays** | Public holidays, company holidays, paid/unpaid | ✅ Production-ready |
-| **Multi-tenant** | Organization isolation, role-based access | ✅ Production-ready |
+| **Multi-tenant** | Organization isolation, security validated | ✅ **HARDENED** Production-ready |
 | **Single-tenant** | Auto-inject org ID, simplified API | ✅ Production-ready |
 | **Transactions** | Atomic operations with Mongoose sessions | ✅ Production-ready |
-| **Pure Functions** | No-DB calculations for previews/testing | ✅ Production-ready |
+| **Pure Calculators** | Client-side salary previews, no-DB testing | ✅ **NEW** Production-ready |
 
 ## Why This Package?
 
@@ -124,6 +125,7 @@ const employee = await payroll.hire({
 // Process monthly payroll (automatic attendance deductions)
 const result = await payroll.processSalary({
   employeeId: employee._id,
+  organizationId: org._id,
   month: 3,
   year: 2024,
 });
@@ -149,6 +151,8 @@ Modern HRM needs flexibility in how employees are identified. Not all employees 
 - **Guest Employees**: Create employees without userId (no user account required)
 - **Flexible Identity Modes**: Lookup by userId, employeeId, email, or any
 - **Smart Fallback Chain**: Automatic fallback if primary lookup fails
+- **Dual Identity Support**: MongoDB ObjectId (_id) and business string IDs (employeeId)
+- **Collision Prevention**: `employeeIdMode` parameter prevents 24-hex business ID collisions
 - **Partial Indexes**: Multiple guest employees per organization (userId field completely absent)
 - **Email Normalization**: Case-insensitive email lookup (lowercase + trim)
 - **Email Reuse**: Terminated employees' emails can be reused for rehiring
@@ -451,6 +455,76 @@ await payroll.hire({
 });
 ```
 
+### Dual Identity & Collision Prevention (v2.3.0+)
+
+The package supports **dual identity** for employees:
+- **MongoDB ObjectId** (`_id` field) - Internal database ID
+- **Business String ID** (`employeeId` field) - Human-readable like "EMP-001"
+
+**Problem: 24-Hex Collision**
+
+If your business employeeId is 24 hexadecimal characters (like `"507f1f77bcf86cd799439011"`), it looks exactly like a MongoDB ObjectId. Auto-detection will treat it as `_id` instead of `employeeId`, causing lookup failures.
+
+**Solution: `employeeIdMode` Parameter**
+
+All payroll methods now support explicit `employeeIdMode` to prevent collision:
+
+```typescript
+// Process salary with explicit business ID mode
+const result = await payroll.processSalary({
+  employeeId: "507f1f77bcf86cd799439011",  // Looks like ObjectId!
+  employeeIdMode: 'businessId',             // Force treat as string
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+
+// Without employeeIdMode (auto-detect)
+// → Would try to find by _id (wrong!)
+
+// With employeeIdMode: 'businessId'
+// → Correctly finds by employeeId field
+```
+
+**Available Modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `'auto'` | Auto-detect via ObjectId validation (default) |
+| `'objectId'` | Force treat as MongoDB `_id` |
+| `'businessId'` | Force treat as string `employeeId` |
+
+**When to Use:**
+
+```typescript
+// ✅ Use 'businessId' if your IDs are 24-hex strings
+employeeId: "507f1f77bcf86cd799439011"  → employeeIdMode: 'businessId'
+employeeId: "60d5ec49f1b2c72b8c8e4f3a"  → employeeIdMode: 'businessId'
+
+// ✅ Auto mode works for normal business IDs
+employeeId: "EMP-001"     → employeeIdMode: 'auto' (default)
+employeeId: "DRIVER-123"  → employeeIdMode: 'auto' (default)
+
+// ✅ Use 'objectId' when passing MongoDB _id explicitly
+employeeId: employee._id  → employeeIdMode: 'objectId'
+```
+
+**Supported Methods (12 total):**
+
+All employee operation methods support `employeeIdMode`:
+- `getEmployee()`
+- `updateEmployment()`
+- `terminate()`
+- `reHire()`
+- `updateSalary()`
+- `addAllowance()`
+- `removeAllowance()`
+- `addDeduction()`
+- `removeDeduction()`
+- `updateBankDetails()`
+- `processSalary()`
+- `payrollHistory()`
+
 ### Real-World Use Cases
 
 **1. Delivery Company**
@@ -603,16 +677,34 @@ Building a single-organization HRM? Configure once, forget `organizationId` ever
 // Configure with your organization ID once
 const payroll = createPayrollInstance()
   .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel, AttendanceModel })
-  .forSingleTenant({ organizationId: myOrg._id })  // ← Set once
+  .forSingleTenant({
+    organizationId: myOrg._id,
+    autoInject: true  // ✅ Enable auto-injection
+  })
   .build();
 
 // No organizationId needed in operations - auto-injected!
 const employee = await payroll.hire({
   userId: user._id,
+  // organizationId auto-injected ✨
   employment: { position: 'Manager', department: 'hr', type: 'full_time' },
   compensation: { baseAmount: 150000, currency: 'USD' },
 });
+
+await payroll.processSalary({
+  employeeId: employee._id,
+  // organizationId auto-injected ✨
+  month: 3,
+  year: 2024
+});
 ```
+
+**How it works:**
+- Container automatically injects `organizationId` into ALL operations
+- Security is STILL enforced at database level (same queries with org filter)
+- Perfect for: internal HR systems, database-per-tenant architecture, microservices
+
+**⚠️ Important:** You MUST set `autoInject: true` to enable auto-injection. Without it, you'll get "organizationId is required" errors.
 
 ## Attendance (ClockIn)
 
@@ -1762,7 +1854,118 @@ async function processMonthlyPayroll(employee, month, year) {
 }
 ```
 
-### Pure Functions (No Database)
+### Pure Calculators (Client-Side Capable!) 🆕
+
+Calculate salaries **without database** - perfect for client-side previews, testing, and microservices!
+
+### Quick Start
+
+```typescript
+import {
+  calculateSalaryBreakdown,
+  calculateProRating,
+  calculateDailyRate,
+} from '@classytic/payroll';
+
+// Preview salary calculation (no API call needed!)
+const preview = calculateSalaryBreakdown({
+  employee: {
+    hireDate: new Date('2024-01-01'),
+    compensation: {
+      baseAmount: 100000,
+      currency: 'USD',
+      allowances: [{ type: 'housing', amount: 20000, taxable: true, recurring: true }],
+      deductions: [{ type: 'insurance', amount: 5000, recurring: true, auto: true }],
+    },
+  },
+  period: {
+    month: 3,
+    year: 2024,
+    startDate: new Date('2024-03-01'),
+    endDate: new Date('2024-03-31'),
+  },
+  config: {
+    allowProRating: true,
+    autoDeductions: true,
+    defaultCurrency: 'USD',
+    attendanceIntegration: false,
+  },
+  taxBrackets: [], // Your tax brackets
+});
+
+console.log(preview.netSalary); // Instant preview!
+```
+
+### Available Calculators
+
+```typescript
+// 1. Pro-Rating Calculator
+const proRating = calculateProRating({
+  hireDate: new Date('2024-03-15'),
+  terminationDate: null,
+  periodStart: new Date('2024-03-01'),
+  periodEnd: new Date('2024-03-31'),
+  workingDays: [1, 2, 3, 4, 5],
+});
+console.log(proRating.ratio); // 0.64 (64% of month worked)
+
+// 2. Daily Rate Calculator
+const dailyRate = calculateDailyRate(100000, 22); // 4545
+const hourlyRate = calculateHourlyRate(100000, 22, 8); // 568
+
+// 3. Attendance Deduction
+const deduction = calculateAttendanceDeduction({
+  expectedWorkingDays: 22,
+  actualWorkingDays: 20,
+  dailyRate: 4545,
+});
+console.log(deduction.deductionAmount); // 9090
+```
+
+### Use Cases
+
+**1. Client-Side Salary Preview (React/Vue/Angular)**
+```typescript
+function SalaryPreview({ baseAmount, allowances }) {
+  const [preview, setPreview] = useState(null);
+
+  useEffect(() => {
+    const result = calculateSalaryBreakdown({
+      employee: { hireDate: new Date(), compensation: { baseAmount, allowances } },
+      period: getCurrentPeriod(),
+      config: appConfig,
+      taxBrackets: appTaxBrackets,
+    });
+    setPreview(result);
+  }, [baseAmount, allowances]);
+
+  return <div>Estimated Net: {preview?.netSalary}</div>;
+}
+```
+
+**2. Testing Without Database**
+```typescript
+import { calculateSalaryBreakdown } from '@classytic/payroll';
+
+describe('Salary Calculations', () => {
+  it('calculates correctly', () => {
+    const result = calculateSalaryBreakdown({...});
+    expect(result.netSalary).toBe(90000);
+  });
+  // No MongoDB, no Mongoose, just pure logic!
+});
+```
+
+**3. Microservices/Serverless**
+```typescript
+// Lightweight function - no Payroll instance needed
+export const handler = async (event) => {
+  const result = calculateSalaryBreakdown(event.input);
+  return { statusCode: 200, body: JSON.stringify(result) };
+};
+```
+
+## Pure Functions (No Database)
 
 Shift compliance calculations are pure functions - no database required:
 
@@ -1953,6 +2156,314 @@ LeaveRequest.findOverlapping(employeeId, startDate, endDate)
 LeaveRequest.hasOverlap(employeeId, startDate, endDate)
 ```
 
+## Tax Withholding
+
+Track tax liability separately from payroll transactions for government payment reconciliation.
+
+### Overview
+
+When processing payroll, taxes are deducted from employee salaries. The **Tax Withholding** feature creates separate records to track government tax liability, making it easy to query pending taxes and record payments to tax authorities.
+
+**Key Benefits:**
+- 📊 Query pending taxes by type, period, or employee
+- 💰 Track tax payments to government with reference numbers
+- 🔍 Generate tax summaries for compliance reporting
+- 🎯 One record per tax type for clean reporting
+
+### Quick Start (3 Steps)
+
+```typescript
+import {
+  getTaxWithholdingModel,
+  createPayrollInstance,
+  createTaxWithholdingService,
+} from '@classytic/payroll';
+
+// 1. Setup TaxWithholding model (optional)
+const TaxWithholding = getTaxWithholdingModel();
+
+// 2. Initialize Payroll with TaxWithholding support
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel: Employee,
+    PayrollRecordModel: PayrollRecord,
+    TransactionModel: Transaction,
+    TaxWithholdingModel: TaxWithholding,  // Optional - graceful degradation
+  })
+  .build();
+
+// 3. Tax withholdings are automatically created during salary processing
+const result = await payroll.processSalary({
+  employeeId: employee._id,
+  month: 3,
+  year: 2024,
+});
+// → Creates TaxWithholding records for each tax type in breakdown
+```
+
+### Transaction Amount Semantic (IMPORTANT)
+
+**New in v2.2.1**: `Transaction.amount` now represents net salary (actual payment), not gross:
+
+```typescript
+const transaction = {
+  grossAmount: 110000,  // NEW: Gross salary (before tax)
+  amount: 67091,        // CHANGED: Net salary (actual payment)
+  tax: 42909,          // Income tax withheld
+};
+```
+
+This aligns with industry standards (Stripe, Square, banking) where `amount` = actual cash movement.
+
+### Tax Types (7 Built-in)
+
+| Type | Description | Common Use |
+|------|-------------|------------|
+| `income_tax` | Income tax withholding | Federal/state income tax |
+| `social_security` | Social security contributions | FICA, national insurance |
+| `health_insurance` | Health insurance premiums | Government health schemes |
+| `pension` | Pension/retirement contributions | 401k, state pension |
+| `employment_insurance` | Unemployment insurance | State unemployment tax |
+| `local_tax` | Local/municipal taxes | City or county taxes |
+| `other` | Custom tax types | Jurisdiction-specific taxes |
+
+### Common Use Cases
+
+#### 1. Process Salary (Auto-Create Tax Withholdings)
+
+```typescript
+// Tax withholdings are created automatically
+const result = await payroll.processSalary({
+  employeeId: employee._id,
+  month: 3,
+  year: 2024,
+});
+
+// Access tax info
+console.log(result.payrollRecord.breakdown.taxAmount);  // 42909
+console.log(result.transaction.tax);                    // 42909
+console.log(result.transaction.amount);                 // 67091 (net)
+console.log(result.transaction.grossAmount);            // 110000 (gross)
+```
+
+#### 2. Query Pending Taxes
+
+```typescript
+// Get all pending taxes for an organization
+const pending = await payroll.getPendingTaxWithholdings({
+  organizationId: org._id,
+});
+
+// Filter by tax type
+const pendingIncome = await payroll.getPendingTaxWithholdings({
+  organizationId: org._id,
+  taxType: 'income_tax',
+});
+
+// Filter by period
+const q1Pending = await payroll.getPendingTaxWithholdings({
+  organizationId: org._id,
+  fromPeriod: { month: 1, year: 2024 },
+  toPeriod: { month: 3, year: 2024 },
+});
+
+// Filter by employee
+const employeeTaxes = await payroll.getPendingTaxWithholdings({
+  organizationId: org._id,
+  employeeId: employee._id,
+});
+```
+
+#### 3. Generate Tax Summary
+
+```typescript
+// Summary by tax type (default)
+const summary = await payroll.getTaxSummary({
+  organizationId: org._id,
+  fromPeriod: { month: 1, year: 2024 },
+  toPeriod: { month: 12, year: 2024 },
+});
+
+console.log(summary);
+// {
+//   totalAmount: 514908,
+//   count: 12,
+//   byType: [
+//     { taxType: 'income_tax', totalAmount: 514908, count: 12, withholdingIds: [...] },
+//     { taxType: 'social_security', totalAmount: 82385, count: 12, withholdingIds: [...] },
+//   ],
+//   period: { fromMonth: 1, fromYear: 2024, toMonth: 12, toYear: 2024 }
+// }
+```
+
+#### 4. Mark Taxes as Paid
+
+```typescript
+// Mark specific withholdings as paid
+const result = await payroll.markTaxWithholdingsPaid({
+  organizationId: org._id,
+  withholdingIds: [id1, id2, id3],
+  referenceNumber: 'GOV-2024-Q1-12345',  // Government payment reference
+  paidAt: new Date(),
+  notes: 'Q1 2024 income tax payment',
+
+  // Optional: Create transaction for government payment
+  createTransaction: true,
+});
+
+console.log(result);
+// {
+//   withholdings: [/* updated withholding docs */],
+//   transaction: {
+//     type: 'tax_payment',
+//     flow: 'outflow',
+//     amount: 514908,
+//     description: 'Tax payment to government - GOV-2024-Q1-12345',
+//     metadata: { withholdingIds: [...], referenceNumber: '...' }
+//   }
+// }
+```
+
+### Service Usage (Advanced)
+
+For more control, use `TaxWithholdingService` directly:
+
+```typescript
+import { createTaxWithholdingService } from '@classytic/payroll';
+
+const taxService = createTaxWithholdingService({
+  TaxWithholdingModel: TaxWithholding,
+  TransactionModel: Transaction,
+  events: eventBus,  // Optional event emitter
+});
+
+// Get pending taxes
+const pending = await taxService.getPending({
+  organizationId: org._id,
+  taxType: 'income_tax',
+});
+
+// Generate summary
+const summary = await taxService.getSummary({
+  organizationId: org._id,
+  fromPeriod: { month: 1, year: 2024 },
+  toPeriod: { month: 3, year: 2024 },
+});
+
+// Mark as paid
+await taxService.markPaid({
+  organizationId: org._id,
+  withholdingIds: pending.map(p => p._id),
+  referenceNumber: 'GOV-REF-123',
+  createTransaction: true,
+});
+```
+
+### Schema & Model
+
+#### TaxWithholding Document Structure
+
+```typescript
+interface TaxWithholdingDocument {
+  _id: ObjectId;
+  organizationId: ObjectId;
+  employeeId: ObjectId;
+  userId?: ObjectId;
+  payrollRecordId: ObjectId;
+  transactionId: ObjectId;
+
+  period: {
+    month: number;
+    year: number;
+    startDate: Date;
+    endDate: Date;
+    payDate: Date;
+  };
+
+  amount: number;
+  currency: string;
+
+  taxType: TaxType;
+  taxRate: number;
+  taxableAmount: number;
+
+  status: 'pending' | 'submitted' | 'paid';
+
+  submittedAt?: Date;
+  paidAt?: Date;
+  governmentTransactionId?: ObjectId;
+  referenceNumber?: string;
+
+  notes?: string;
+  metadata?: Record<string, unknown>;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+#### Custom Schema (Optional)
+
+```typescript
+import { createTaxWithholdingSchema, taxWithholdingFields } from '@classytic/payroll';
+
+// Use schema creator
+const customSchema = createTaxWithholdingSchema({
+  customField: { type: String },
+});
+
+// Or spread fields into your schema
+const schema = new Schema({
+  ...taxWithholdingFields,
+  customField: { type: String },
+});
+```
+
+### Events
+
+Tax withholding emits events for workflow integration:
+
+```typescript
+payroll.on('tax:withheld', (payload) => {
+  // Fired when tax withholding is created
+  console.log(payload.withholding);
+  console.log(payload.employee);
+  console.log(payload.period);
+});
+
+payroll.on('tax:paid', (payload) => {
+  // Fired when taxes are marked as paid
+  console.log(payload.withholdings);
+  console.log(payload.totalAmount);
+  console.log(payload.referenceNumber);
+  console.log(payload.transaction);  // If createTransaction: true
+});
+```
+
+### Optional Feature
+
+Tax withholding is **optional** - the package works perfectly without it:
+
+```typescript
+// Without TaxWithholding model
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel: Employee,
+    PayrollRecordModel: PayrollRecord,
+    TransactionModel: Transaction,
+    // No TaxWithholdingModel
+  })
+  .build();
+
+// Salary processing still works, just no separate tax tracking
+const result = await payroll.processSalary({
+  employeeId: employee._id,
+  month: 3,
+  year: 2024,
+});
+// → Tax still calculated in breakdown, but no TaxWithholding records created
+```
+
 ### Pure Functions (No DB)
 
 ```typescript
@@ -1986,6 +2497,97 @@ const breakdown = calculateSalaryBreakdown({
   options: { holidays: [new Date('2024-03-26')] },
   attendance: { expectedDays: 22, actualDays: 20 },
 });
+```
+
+## Package Exports & Architecture
+
+### Public API
+
+The package follows a **single entry point** architecture for simplicity and safety:
+
+#### Main Barrel (`@classytic/payroll`)
+- **Payroll class** - Primary API with full org isolation
+- **Types & Interfaces** - TypeScript definitions
+- **Enums & Constants** - Status, departments, leave types, etc.
+- **Models** - Schema creators and model getters
+- **Factories** - Employee, payroll, compensation factories
+
+#### Specialized Exports
+
+```typescript
+// Pure calculators (NEW in v2.3.0) - No database dependencies
+import {
+  calculateSalaryBreakdown,
+  calculateProRating,
+  calculateAttendanceDeduction,
+} from '@classytic/payroll/calculators';
+
+// Schemas - For custom model creation
+import {
+  createEmployeeSchema,
+  createPayrollRecordSchema,
+  createLeaveRequestSchema,
+  createTaxWithholdingSchema,
+} from '@classytic/payroll/schemas';
+
+// Core - Event bus, plugins, configuration
+import {
+  createEventBus,
+  PluginManager,
+  HRM_CONFIG,
+} from '@classytic/payroll/core';
+
+// Utils - Query builders, validation, calculations
+import {
+  findEmployeeSecure,
+  resolveOrganizationId,
+  calculateGross,
+  calculateNet,
+  employee as employeeQuery,
+  payroll as payrollQuery,
+} from '@classytic/payroll/utils';
+
+// Shift Compliance - Late penalties, overtime
+import {
+  LateComplianceManager,
+  ShiftCompliancePlugin,
+} from '@classytic/payroll/shift-compliance';
+
+// Jurisdiction - Tax brackets, holidays
+import {
+  JurisdictionRegistry,
+  registerTaxBrackets,
+} from '@classytic/payroll/jurisdiction';
+```
+
+### Internal Services (NOT Exported)
+
+The following services are **internal only** and not accessible from the public API:
+
+- `EmployeeService`
+- `PayrollService`
+- `CompensationService`
+- `TaxWithholdingService`
+
+**Why internal?**
+- All functionality is available through `Payroll` class methods
+- Enforces consistent security (organizationId isolation)
+- Prevents accidental misuse
+- Single clear way to do things
+
+**If you need direct service access** (advanced use cases), you can import them internally:
+
+```typescript
+// ⚠️ NOT RECOMMENDED - Services are internal
+import { EmployeeService } from '@classytic/payroll/services';
+
+// ✅ RECOMMENDED - Use Payroll class instead
+const payroll = createPayrollInstance()
+  .withModels({ ... })
+  .build();
+
+await payroll.hire({ ... });
+await payroll.processSalary({ ... });
 ```
 
 ## Related Packages

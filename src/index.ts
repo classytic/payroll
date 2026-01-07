@@ -2,15 +2,28 @@
  * @classytic/payroll
  *
  * Enterprise-grade HRM and Payroll Management for MongoDB/Mongoose
- * One clear way: builder + schemas + plugin + errors
+ * One clear way: Payroll class + schemas + utilities
+ *
+ * ## Public API
+ *
+ * - **Payroll class**: Single entry point with full org isolation
+ * - **Schemas, Types, Utilities**: For extending and customizing
+ *
+ * All services (Employee, Payroll, Compensation, Leave, TaxWithholding) are
+ * internal-only. Use Payroll class methods for multi-tenant safe operations.
  *
  * @packageDocumentation
  */
 
 // ============================================================================
-// Main API (recommended)
+// Main API (Payroll Class - Single Entry Point)
 // ============================================================================
 
+/**
+ * The Payroll class is the ONLY way to interact with payroll operations.
+ * All employee, payroll, compensation, leave, and tax operations go through
+ * this orchestrated API with built-in multi-tenant isolation.
+ */
 export {
   Payroll,
   PayrollBuilder,
@@ -43,6 +56,7 @@ export type {
   EmploymentConfig,
   ValidationConfig,
   EmployeeIdentityMode,
+  EmployeeIdMode,
   TaxBracket,
   SalaryBandRange,
   RoleMappingConfig,
@@ -93,6 +107,7 @@ export type {
   ResetAnnualLeaveOptions,
 
   // Operation parameter types
+  EmployeeOperationParams,  // v2.3.0: Base interface for all employee operations
   HireEmployeeParams,
   UpdateEmploymentParams,
   TerminateEmployeeParams,
@@ -135,7 +150,6 @@ export type {
   HttpError,
 
   // Utility types
-  ProRatingResult,
   PayPeriodInfo,
   EmployeeValidationResult,
   QueryOptions,
@@ -144,8 +158,15 @@ export type {
 } from './types.js';
 
 // ============================================================================
-// TRANSACTION INTERFACE (for app-level schema)
+// TRANSACTION INTERFACE (aligned with @classytic/shared-types)
 // ============================================================================
+
+/**
+ * Use @classytic/shared-types for transaction interfaces
+ * This ensures alignment between payroll and revenue packages
+ * 
+ * import type { ITransaction, ITransactionCreateInput } from '@classytic/shared-types';
+ */
 
 export type {
   IPayrollTransaction,
@@ -155,6 +176,31 @@ export type {
 export {
   isPayrollTransaction,
 } from './types/transaction.interface.js';
+
+// Transaction factory for creating consistent transactions
+export {
+  createPayrollTransaction,
+  createTaxPaymentTransaction,
+  TransactionFactory,
+  type CreatePayrollTransactionInput,
+  type CreateTaxPaymentTransactionInput,
+} from './factories/transaction.factory.js';
+
+// ============================================================================
+// Idempotency & Webhooks (Stripe-level features)
+// ============================================================================
+
+export {
+  IdempotencyManager,
+  generatePayrollIdempotencyKey,
+  type IdempotentResult,
+} from './core/idempotency.js';
+
+export {
+  WebhookManager,
+  type WebhookConfig,
+  type WebhookDelivery,
+} from './core/webhooks.js';
 
 // ============================================================================
 // Enums / Constants (common)
@@ -305,18 +351,73 @@ export {
   accrueLeaveToBalance,
 } from './utils/index.js';
 
+// ============================================================================
+// Leave Service (INTERNAL ONLY - NOT EXPORTED)
+// ============================================================================
+
+// LeaveService is intentionally NOT exported because:
+// 1. Uses findById() without org isolation (lines 443, 555, 789)
+// 2. organizationId is optional in single-tenant mode (footgun for multi-tenant)
+// 3. For multi-tenant safe operations, use Payroll class leave methods:
+//    - payroll.requestLeave()
+//    - payroll.reviewLeaveRequest()
+//    - payroll.cancelLeaveRequest()
+//    - payroll.getLeaveHistory()
+//
+// LeaveService is for internal use by the Payroll class only.
+
+// export {
+//   LeaveService,
+//   createLeaveService,
+//   type LeaveServiceConfig,
+//   type RequestLeaveParams,
+//   type ReviewLeaveParams,
+//   type CancelLeaveParams,
+//   type LeaveForPayrollParams,
+//   type LeaveRequestResult,
+//   type ReviewResult,
+//   type OverlapCheckResult,
+// } from './services/index.js';
+
+// ============================================================================
+// Pure Calculators
+// ============================================================================
+
+/**
+ * @since v2.3.0
+ * Pure calculation functions with no database dependencies.
+ * 
+ * Perfect for:
+ * - Client-side salary previews
+ * - Testing without DB setup
+ * - Microservices/serverless
+ * - Documentation examples
+ * 
+ * All calculators are pure (no side effects) and can run in browser.
+ */
 export {
-  LeaveService,
-  createLeaveService,
-  type LeaveServiceConfig,
-  type RequestLeaveParams,
-  type ReviewLeaveParams,
-  type CancelLeaveParams,
-  type LeaveForPayrollParams,
-  type LeaveRequestResult,
-  type ReviewResult,
-  type OverlapCheckResult,
-} from './services/index.js';
+  // Salary breakdown calculator (main)
+  calculateSalaryBreakdown,
+  type SalaryCalculationInput,
+  type ProcessedAllowance,
+  type ProcessedDeduction,
+
+  // Pro-rating calculator
+  calculateProRating,
+  applyProRating,
+  shouldProRate,
+  type ProRatingInput,
+  type ProRatingResult,
+
+  // Attendance deduction calculator
+  calculateAttendanceDeduction,
+  calculateDailyRate,
+  calculateHourlyRate,
+  calculatePartialDayDeduction,
+  calculateTotalAttendanceDeduction,
+  type AttendanceDeductionInput,
+  type AttendanceDeductionResult,
+} from './calculators/index.js';
 
 // ============================================================================
 // Shift Compliance (NEW)
@@ -422,3 +523,103 @@ export {
   type AttendancePolicyDocument,
   type AttendancePolicyModel,
 } from './shift-compliance/index.js';
+
+// ============================================================================
+// Tax Withholding
+// ============================================================================
+
+export type {
+  TaxWithholdingDocument,
+  TaxType,
+  TaxStatus,
+  GetPendingTaxParams,
+  TaxSummaryParams,
+  TaxSummaryResult,
+  TaxSummaryByType,
+  MarkTaxPaidParams,
+} from './types.js';
+
+export {
+  TAX_TYPE,
+  TAX_STATUS,
+  TAX_TYPE_VALUES,
+  TAX_STATUS_VALUES,
+  isValidTaxType,
+  isValidTaxStatus,
+  isPendingTaxStatus,
+  isPaidTaxStatus,
+} from './enums.js';
+
+export {
+  taxWithholdingSchema,
+  getTaxWithholdingModel,
+  type TaxWithholdingModel,
+} from './models/index.js';
+
+export {
+  taxWithholdingFields,
+  taxWithholdingIndexes,
+  applyTaxWithholdingIndexes,
+  createTaxWithholdingSchema,
+} from './schemas/index.js';
+
+// ============================================================================
+// Tax Withholding Service (INTERNAL ONLY - NOT EXPORTED)
+// ============================================================================
+
+// TaxWithholdingService is intentionally NOT exported for API consistency.
+// All tax withholding operations are available via Payroll class methods:
+//   - payroll.getPendingTaxWithholdings()
+//   - payroll.getTaxSummary()
+//   - payroll.markTaxWithholdingsPaid()
+//
+// TaxWithholdingService is for internal use by the Payroll class only.
+
+// export {
+//   TaxWithholdingService,
+//   createTaxWithholdingService,
+//   type TaxWithholdingServiceConfig,
+//   type CreateFromBreakdownParams,
+// } from './services/index.js';
+
+// ============================================================================
+// Security Utilities (Multi-Tenant Isolation)
+// ============================================================================
+
+/**
+ * @since v2.3.0
+ * Secure employee lookup utilities that enforce organizationId isolation
+ */
+export {
+  findEmployeeSecure,
+  employeeExistsSecure,
+  findEmployeesSecure,
+  requireOrganizationId,
+  type SecureEmployeeLookupOptions,
+} from './utils/index.js';
+
+/**
+ * @since v2.3.0
+ * Smart organization ID resolution with priority chain
+ */
+export {
+  resolveOrganizationId,
+  validateOrganizationId,
+  tryResolveOrganizationId,
+  type ResolveOrganizationIdParams,
+  type ContainerLike,
+} from './utils/index.js';
+
+/**
+ * @since v2.3.0
+ * Dual identity system (ObjectId _id + string employeeId)
+ */
+export {
+  detectEmployeeIdType,
+  normalizeEmployeeId,
+  isStringEmployeeId,
+  isObjectIdEmployeeId,
+  formatEmployeeId,
+  type EmployeeIdType,
+  type EmployeeQueryFilter,
+} from './utils/index.js';

@@ -67,7 +67,8 @@ beforeAll(async () => {
     employeeId: Schema.Types.ObjectId,
     type: String,
     category: String,
-    amount: Number,
+    grossAmount: Number,  // v3.0: gross amount before deductions
+    amount: Number,       // v3.0: net amount (actual payment)
     currency: String,
     method: String,
     status: String,
