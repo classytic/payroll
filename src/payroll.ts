@@ -263,18 +263,35 @@ export class Payroll<
       throw new Error('organizationId is required (or configure single-tenant mode)');
     }
 
-    // Check for existing active employee
-    const existingQuery = employeeQuery()
-      .forUser(userId)
-      .forOrganization(organizationId)
-      .employed()
-      .build();
+    // Validate identity based on config
+    if (this.config.validation.requireUserId && !userId) {
+      throw new ValidationError(
+        'userId is required (set validation.requireUserId: false to allow guest employees)',
+        { field: 'userId' }
+      );
+    }
 
-    let existing = this.models.EmployeeModel.findOne(existingQuery);
-    if (session) existing = existing.session(session);
-    
-    if (await existing) {
-      throw new Error('User is already an active employee in this organization');
+    // Ensure at least one identity field is provided
+    if (!userId && !employment.email && !employment.employeeId) {
+      throw new ValidationError(
+        'At least one identity field required: userId, email, or employeeId'
+      );
+    }
+
+    // Check for existing active employee (only if userId provided)
+    if (userId) {
+      const existingQuery = employeeQuery()
+        .forUser(userId)
+        .forOrganization(organizationId)
+        .employed()
+        .build();
+
+      let existing = this.models.EmployeeModel.findOne(existingQuery);
+      if (session) existing = existing.session(session);
+
+      if (await existing) {
+        throw new Error('User is already an active employee in this organization');
+      }
     }
 
     const employeeData = EmployeeFactory.create({
@@ -286,13 +303,62 @@ export class Payroll<
         currency: compensation.currency || this.config.payroll.defaultCurrency,
       },
       bankDetails,
-    });
+    }, this.config);
 
-    // Use type assertion since we're creating with known-compatible data
-    const [employee] = await (this.models.EmployeeModel as Model<EmployeeDocument>).create(
-      [employeeData],
-      { session }
-    ) as unknown as [TEmployee];
+    // For guest employees, use insertOne to avoid Mongoose setting undefined fields to null
+    // This ensures partial indexes work correctly (partial index only includes docs with userId)
+    let employee: TEmployee;
+
+    if (!userId) {
+      // Guest employee - use direct MongoDB insertOne to preserve partial index behavior
+      // Create a clean object with only defined fields (critical for partial indexes)
+      const dataToInsert: Record<string, any> = {};
+
+      // Copy all fields from employeeData except userId/email which need special handling
+      for (const [key, value] of Object.entries(employeeData)) {
+        // Skip userId and email - we'll handle them explicitly below
+        if (key === 'userId' || key === 'email') continue;
+        dataToInsert[key] = value;
+      }
+
+      // Only include email if it exists and is not empty (critical for partial index)
+      if (employeeData.email && employeeData.email !== '') {
+        dataToInsert.email = employeeData.email;
+      }
+
+      // NEVER include userId for guest employees (partial index excludes docs without userId)
+      // Do not add userId field at all - not even as null or undefined
+
+      // Add timestamps manually since we're bypassing Mongoose
+      const now = new Date();
+      dataToInsert.createdAt = now;
+      dataToInsert.updatedAt = now;
+
+      // Use direct MongoDB insertOne
+      const insertOptions = session ? { session: session as any } : {};
+      const result = await (this.models.EmployeeModel as Model<EmployeeDocument>).collection.insertOne(
+        dataToInsert,
+        insertOptions
+      );
+
+      // Convert back to Mongoose document
+      employee = await (this.models.EmployeeModel as Model<EmployeeDocument>).findById(
+        result.insertedId,
+        null,
+        { session }
+      ) as TEmployee;
+
+      if (!employee) {
+        throw new Error('Failed to retrieve created guest employee');
+      }
+    } else {
+      // Regular employee with userId - use normal Mongoose create
+      const [createdEmployee] = await (this.models.EmployeeModel as Model<EmployeeDocument>).create(
+        [employeeData],
+        { session }
+      ) as unknown as [TEmployee];
+      employee = createdEmployee;
+    }
 
     // Emit event
     this._events.emitSync('employee:hired', {
@@ -478,6 +544,147 @@ export class Payroll<
     }
 
     return employee as TEmployee;
+  }
+
+  /**
+   * Get employee by flexible identity (userId, employeeId, or email)
+   *
+   * Supports multiple identity modes with automatic fallback:
+   * - 'userId': Lookup by user account ID (traditional)
+   * - 'employeeId': Lookup by human-readable employee ID (e.g., "EMP-001")
+   * - 'email': Lookup by email address (for guest employees)
+   * - 'any': Try all modes until found
+   *
+   * @example
+   * // By user ID (traditional)
+   * const emp = await payroll.getEmployeeByIdentity({
+   *   identity: userId,
+   *   organizationId,
+   *   mode: 'userId'
+   * });
+   *
+   * // By employee ID (human-readable)
+   * const emp = await payroll.getEmployeeByIdentity({
+   *   identity: 'EMP-001',
+   *   organizationId,
+   *   mode: 'employeeId'
+   * });
+   *
+   * // By email (guest employees)
+   * const emp = await payroll.getEmployeeByIdentity({
+   *   identity: 'driver@example.com',
+   *   organizationId,
+   *   mode: 'email'
+   * });
+   *
+   * // Auto-detect (uses config.identityMode + fallbacks)
+   * const emp = await payroll.getEmployeeByIdentity({
+   *   identity: 'EMP-001',
+   *   organizationId
+   * });
+   */
+  async getEmployeeByIdentity(params: {
+    identity: ObjectIdLike | string;
+    organizationId?: ObjectIdLike;
+    mode?: import('./types.js').EmployeeIdentityMode;
+    populateUser?: boolean;
+    session?: ClientSession;
+  }): Promise<TEmployee> {
+    this.ensureInitialized();
+
+    const {
+      identity,
+      mode = this.config.validation.identityMode,
+      populateUser = true,
+      session
+    } = params;
+
+    // Auto-inject organizationId in single-tenant mode
+    const organizationId = params.organizationId ?? this._container.getOrganizationId();
+    if (!organizationId) {
+      throw new Error('organizationId is required (or configure single-tenant mode)');
+    }
+
+    const orgId = toObjectId(organizationId);
+    const modes: Array<import('./types.js').EmployeeIdentityMode> = [
+      mode,
+      ...this.config.validation.identityFallbacks
+    ];
+
+    for (const currentMode of modes) {
+      let employee: TEmployee | null = null;
+
+      switch (currentMode) {
+        case 'userId': {
+          // Lookup by userId (traditional pattern)
+          try {
+            const userId = toObjectId(identity);
+            let query = this.models.EmployeeModel.findOne({
+              userId,
+              organizationId: orgId
+            });
+            if (session) query = query.session(session);
+            if (populateUser) query = query.populate('userId', 'name email phone');
+            employee = await query as TEmployee | null;
+          } catch {
+            // Invalid ObjectId, skip this mode
+          }
+          break;
+        }
+
+        case 'employeeId': {
+          // Lookup by employeeId (human-readable)
+          let query = this.models.EmployeeModel.findOne({
+            employeeId: identity.toString(),
+            organizationId: orgId
+          });
+          if (session) query = query.session(session);
+          if (populateUser) query = query.populate('userId', 'name email phone');
+          employee = await query as TEmployee | null;
+          break;
+        }
+
+        case 'email': {
+          // Lookup by email (guest employees)
+          const email = identity.toString().toLowerCase().trim();
+          let query = this.models.EmployeeModel.findOne({
+            email,
+            organizationId: orgId
+          });
+          if (session) query = query.session(session);
+          if (populateUser) query = query.populate('userId', 'name email phone');
+          employee = await query as TEmployee | null;
+          break;
+        }
+
+        case 'any': {
+          // Try all modes: userId → employeeId → email
+          const anyModes: Array<import('./types.js').EmployeeIdentityMode> = ['userId', 'employeeId', 'email'];
+          for (const tryMode of anyModes) {
+            try {
+              return await this.getEmployeeByIdentity({
+                identity,
+                organizationId,
+                mode: tryMode,
+                populateUser,
+                session
+              });
+            } catch {
+              // Continue to next mode
+            }
+          }
+          break;
+        }
+      }
+
+      if (employee) {
+        return employee;
+      }
+    }
+
+    throw new EmployeeNotFoundError(
+      `Employee not found with identity: ${identity} (tried modes: ${modes.join(', ')})`
+    );
   }
 
   /**
@@ -862,14 +1069,12 @@ export class Payroll<
       const breakdown = await this.calculateSalaryBreakdown(employee, period, { attendance, options }, session);
 
       // Handle userId - could be ObjectId, populated doc, or null
+      // Extract userId if present (optional for guest employees)
       const userIdValue = employee.userId
         ? (typeof employee.userId === 'object' && '_id' in employee.userId
             ? (employee.userId as { _id: mongoose.Types.ObjectId })._id
             : (employee.userId as mongoose.Types.ObjectId))
-        : null;
-      if (!userIdValue) {
-        throw new ValidationError('Employee is missing userId; cannot create payroll record', { field: 'userId' });
-      }
+        : undefined;
 
       // Use type assertions for generic model create operations
       const [payrollRecord] = await (this.models.PayrollRecordModel as Model<PayrollRecordDocument>).create([{
@@ -951,6 +1156,7 @@ export class Payroll<
 
         metadata: {
           employeeId: employee.employeeId,
+          email: (employee as any).email,  // For guest employees
           payrollRecordId: payrollRecord._id.toString(),
         },
       }], session ? { session } : {}) as unknown as [TTransaction & { _id: mongoose.Types.ObjectId }];
@@ -1550,14 +1756,14 @@ export class Payroll<
     const options = input.options || {};
 
     // Work schedule: prefer operation override, then employee schedule, then Mon-Fri default
-    const workDays =
-      options.workSchedule?.workDays ||
+    const workingDays =
+      options.workSchedule?.workingDays ||
       employee.workSchedule?.workingDays ||
       [1, 2, 3, 4, 5];
 
     const holidays = options.holidays || [];
     const workingDaysInPeriod = countWorkingDays(period.startDate, period.endDate, {
-      workDays,
+      workingDays,
       holidays,
     }).workingDays;
     
@@ -1574,7 +1780,7 @@ export class Payroll<
       employee.terminationDate || null,
       period.startDate,
       period.endDate,
-      workDays,
+      workingDays,
       holidays
     );
 
@@ -1721,7 +1927,7 @@ export class Payroll<
     terminationDate: Date | null,
     periodStart: Date,
     periodEnd: Date,
-    workDays: number[],
+    workingDays: number[],
     holidays: Date[] = []
   ): {
     isProRated: boolean;
@@ -1731,14 +1937,14 @@ export class Payroll<
   } {
     const hire = new Date(hireDate);
     const termination = terminationDate ? new Date(terminationDate) : null;
-    
+
     // Determine the actual start and end dates for this employee in this period
     const effectiveStart = hire > periodStart ? hire : periodStart;
     const effectiveEnd = termination && termination < periodEnd ? termination : periodEnd;
-    
+
     // If employee wasn't active during this period
     if (effectiveStart > periodEnd || (termination && termination < periodStart)) {
-      const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workDays, holidays }).workingDays;
+      const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workingDays, holidays }).workingDays;
       return {
         isProRated: true,
         ratio: 0,
@@ -1746,9 +1952,9 @@ export class Payroll<
         effectiveWorkingDays: 0,
       };
     }
-    
-    const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workDays, holidays }).workingDays;
-    const effectiveWorkingDays = countWorkingDays(effectiveStart, effectiveEnd, { workDays, holidays }).workingDays;
+
+    const periodWorkingDays = countWorkingDays(periodStart, periodEnd, { workingDays, holidays }).workingDays;
+    const effectiveWorkingDays = countWorkingDays(effectiveStart, effectiveEnd, { workingDays, holidays }).workingDays;
     const ratio = periodWorkingDays > 0 ? Math.min(1, Math.max(0, effectiveWorkingDays / periodWorkingDays)) : 0;
     const isProRated = ratio < 1;
 

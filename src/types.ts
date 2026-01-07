@@ -230,16 +230,19 @@ export interface EmploymentConfig {
   trackEmploymentHistory: boolean;
 }
 
+/** Employee identity mode - how employees are identified and looked up */
+export type EmployeeIdentityMode = 'userId' | 'employeeId' | 'email' | 'any';
+
 /** Validation configuration */
 export interface ValidationConfig {
   /** Require bank details for salary payment */
   requireBankDetails: boolean;
-  /** Require employee ID */
-  requireEmployeeId: boolean;
-  /** Enforce unique employee ID per organization */
-  uniqueEmployeeIdPerOrg: boolean;
-  /** Allow same user in multiple organizations */
-  allowMultiTenantEmployees: boolean;
+  /** Require userId for all employees (false = allow guest employees) */
+  requireUserId: boolean;
+  /** Primary identity mode for lookups */
+  identityMode: EmployeeIdentityMode;
+  /** Fallback modes if primary lookup fails */
+  identityFallbacks: EmployeeIdentityMode[];
 }
 
 /** Tax bracket definition */
@@ -425,11 +428,15 @@ export interface PayrollStats {
 export interface EmployeeDocument extends Document {
   _id: ObjectId;
   /**
-   * User reference. In real Mongoose usage this can be either:
+   * User reference (optional - guest employees don't have user accounts)
+   * In real Mongoose usage this can be either:
    * - an ObjectId
    * - a populated user document containing at least `_id`
+   * - undefined (guest employee)
    */
-  userId: ObjectId | { _id: ObjectId; name?: string; email?: string; phone?: string };
+  userId?: ObjectId | { _id: ObjectId; name?: string; email?: string; phone?: string };
+  /** Email for guest employees (when userId is not present) */
+  email?: string;
   organizationId: ObjectId;
   employeeId: string;
   employmentType: EmploymentType;
@@ -487,12 +494,21 @@ export interface PayrollBreakdown {
   bonusAmount?: number;
 }
 
+/** Payroll correction entry */
+export interface PayrollCorrection {
+  previousAmount: number;
+  newAmount: number;
+  reason: string;
+  correctedBy: ObjectId;
+  correctedAt: Date;
+}
+
 /** Payroll record document */
 export interface PayrollRecordDocument extends Document {
   _id: ObjectId;
   organizationId: ObjectId;
   employeeId: ObjectId;
-  userId: ObjectId;
+  userId?: ObjectId;  // Optional for guest employees
   period: PayrollPeriod;
   breakdown: PayrollBreakdown;
   transactionId?: ObjectId | null;
@@ -506,6 +522,7 @@ export interface PayrollRecordDocument extends Document {
   payslipUrl?: string;
   exported: boolean;
   exportedAt?: Date | null;
+  corrections?: PayrollCorrection[];
   createdAt?: Date;
   updatedAt?: Date;
   save(options?: { session?: ClientSession }): Promise<this>;
@@ -532,13 +549,15 @@ export interface OperationContext {
 
 /** Hire employee parameters */
 export interface HireEmployeeParams {
-  /** User ID */
-  userId: ObjectIdLike;
+  /** User ID (optional - for guest employees without user account) */
+  userId?: ObjectIdLike;
   /** Organization ID (optional in single-tenant mode - auto-injected) */
   organizationId?: ObjectIdLike;
   /** Employment details */
   employment: {
     employeeId?: string;
+    /** Email for guest employees (when userId is not provided) */
+    email?: string;
     type?: EmploymentType;
     department?: Department | string;
     position: string;
@@ -1205,7 +1224,7 @@ export interface LeaveRequestDocument extends Document {
   _id: ObjectId;
   organizationId?: ObjectId; // Optional for single-tenant mode
   employeeId: ObjectId;
-  userId: ObjectId;
+  userId?: ObjectId;  // Optional for guest employees
   type: LeaveType;
   startDate: Date;
   endDate: Date;
@@ -1296,7 +1315,7 @@ export interface LeaveInitConfig {
 /** Working days calculation options */
 export interface WorkingDaysOptions {
   /** Working days of week (0=Sunday, 6=Saturday). Default: [1,2,3,4,5] */
-  workDays?: number[];
+  workingDays?: number[];
   /** Holiday dates to exclude */
   holidays?: Date[];
   /** Include end date in calculation (default: true) */

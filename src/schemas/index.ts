@@ -15,6 +15,7 @@ import {
   DEDUCTION_TYPE_VALUES,
   TERMINATION_REASON_VALUES,
   PAYROLL_STATUS_VALUES,
+  PAYMENT_METHOD_VALUES,
 } from '../enums.js';
 import { HRM_CONFIG } from '../config.js';
 
@@ -166,7 +167,13 @@ export const employmentFields: SchemaDefinition = {
   userId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+    required: false,  // Allow guest employees (no user account)
+  },
+  email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    required: false,  // For guest employees without user account
   },
   organizationId: {
     type: Schema.Types.ObjectId,
@@ -228,6 +235,8 @@ export const payrollBreakdownSchema = new Schema(
     actualDays: { type: Number, min: 0 },
     proRatedAmount: { type: Number, default: 0, min: 0 },
     attendanceDeduction: { type: Number, default: 0, min: 0 },
+    overtimeAmount: { type: Number, default: 0, min: 0 },
+    bonusAmount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -262,7 +271,7 @@ export const payrollRecordFields: SchemaDefinition = {
   userId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+    required: false,  // Optional for guest employees
   },
   period: { type: periodSchema, required: true },
   breakdown: { type: payrollBreakdownSchema, required: true },
@@ -274,12 +283,28 @@ export const payrollRecordFields: SchemaDefinition = {
   },
   processedAt: { type: Date },
   paidAt: { type: Date },
-  paymentMethod: { type: String },
+  paymentMethod: {
+    type: String,
+    enum: PAYMENT_METHOD_VALUES,
+  },
   processedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   notes: { type: String },
   payslipUrl: { type: String },
+  metadata: {
+    type: Schema.Types.Mixed,
+    default: {},
+  },
   exported: { type: Boolean, default: false },
   exportedAt: { type: Date },
+  corrections: [
+    {
+      previousAmount: Number,
+      newAmount: Number,
+      reason: String,
+      correctedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      correctedAt: { type: Date, default: Date.now },
+    },
+  ],
 };
 
 // ============================================================================
@@ -291,7 +316,27 @@ export const payrollRecordFields: SchemaDefinition = {
  */
 export const employeeIndexes = [
   { fields: { organizationId: 1, employeeId: 1 }, options: { unique: true } },
-  { fields: { userId: 1, organizationId: 1 }, options: { unique: true } },
+  // Partial unique index: Only includes docs with userId field (excludes guest employees)
+  // Uses partialFilterExpression instead of sparse for compound indexes
+  {
+    fields: { userId: 1, organizationId: 1 },
+    options: {
+      unique: true,
+      partialFilterExpression: { userId: { $exists: true } }
+    }
+  },
+  // Partial unique index: Only includes non-terminated docs with email
+  // This allows email reuse when employees are terminated and rehired
+  {
+    fields: { email: 1, organizationId: 1 },
+    options: {
+      unique: true,
+      partialFilterExpression: {
+        email: { $exists: true },
+        status: { $in: ['active', 'on_leave', 'suspended'] }
+      }
+    }
+  },
   { fields: { organizationId: 1, status: 1 } },
   { fields: { organizationId: 1, department: 1 } },
   { fields: { organizationId: 1, 'compensation.netSalary': -1 } },
@@ -313,7 +358,7 @@ export const payrollRecordIndexes = [
     fields: { createdAt: 1 },
     options: {
       expireAfterSeconds: HRM_CONFIG.dataRetention.payrollRecordsTTL,
-      partialFilterExpression: { exported: true },
+      // TTL applies to ALL records (user handles backups/exports at app level)
     },
   },
 ];
@@ -353,6 +398,11 @@ export function createEmployeeSchema(
     },
     { timestamps: true }
   );
+
+  // Note: Pre-save hooks are not needed for partial indexes since:
+  // - Guest employees use insertOne() which bypasses Mongoose hooks
+  // - User-linked employees use Model.create() which properly sets userId
+  // - Partial indexes with partialFilterExpression handle inclusion/exclusion
 
   applyEmployeeIndexes(schema);
   return schema;

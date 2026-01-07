@@ -16,6 +16,7 @@ import type {
   Deduction,
   PaymentFrequency,
   TerminationReason,
+  HRMConfig,
 } from '../types.js';
 import { calculateProbationEnd } from '../utils/date.js';
 import { HRM_CONFIG } from '../config.js';
@@ -25,10 +26,11 @@ import { HRM_CONFIG } from '../config.js';
 // ============================================================================
 
 export interface CreateEmployeeParams {
-  userId: ObjectIdLike;
+  userId?: ObjectIdLike;  // Optional for guest employees
   organizationId: ObjectIdLike;
   employment: {
     employeeId?: string;
+    email?: string;  // For guest employees
     type?: EmploymentType;
     department?: Department | string;
     position: string;
@@ -47,7 +49,8 @@ export interface CreateEmployeeParams {
 }
 
 export interface EmployeeData {
-  userId: ObjectIdLike;
+  userId?: ObjectIdLike;  // Optional for guest employees
+  email?: string;  // For guest employees
   organizationId: ObjectIdLike;
   employeeId: string;
   employmentType: EmploymentType;
@@ -78,6 +81,20 @@ export interface TerminationData {
 }
 
 // ============================================================================
+// Email Normalization
+// ============================================================================
+
+/**
+ * Normalize email address (lowercase + trim)
+ * Ensures consistent email storage and lookup
+ */
+function normalizeEmail(email: string | undefined): string | undefined {
+  if (!email || typeof email !== 'string') return undefined;
+  const trimmed = email.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+// ============================================================================
 // Employee Factory
 // ============================================================================
 
@@ -85,12 +102,16 @@ export class EmployeeFactory {
   /**
    * Create employee data object
    */
-  static create(params: CreateEmployeeParams): EmployeeData {
+  static create(params: CreateEmployeeParams, config: HRMConfig = HRM_CONFIG): EmployeeData {
     const { userId, organizationId, employment, compensation, bankDetails } = params;
     const hireDate = employment.hireDate || new Date();
 
+    // Normalize email (lowercase + trim) for consistent storage and lookup
+    const normalizedEmail = normalizeEmail(employment.email);
+
     return {
-      userId,
+      ...(userId ? { userId } : {}),  // Only include userId if present
+      ...(normalizedEmail ? { email: normalizedEmail } : {}),  // Include normalized email for guest employees
       organizationId,
       employeeId: employment.employeeId || `EMP-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
       employmentType: employment.type || 'full_time',
@@ -100,9 +121,9 @@ export class EmployeeFactory {
       hireDate,
       probationEndDate: calculateProbationEnd(
         hireDate,
-        employment.probationMonths ?? HRM_CONFIG.employment.defaultProbationMonths
+        employment.probationMonths ?? config.employment.defaultProbationMonths
       ),
-      compensation: this.createCompensation(compensation),
+      compensation: this.createCompensation(compensation, config),
       workSchedule: employment.workSchedule || this.defaultWorkSchedule(),
       bankDetails: bankDetails || {},
       payrollStats: {
@@ -122,11 +143,11 @@ export class EmployeeFactory {
     currency?: string;
     allowances?: Array<Partial<Allowance>>;
     deductions?: Array<Partial<Deduction>>;
-  }): Compensation {
+  }, config: HRMConfig = HRM_CONFIG): Compensation {
     return {
       baseAmount: params.baseAmount,
       frequency: params.frequency || 'monthly',
-      currency: params.currency || HRM_CONFIG.payroll.defaultCurrency,
+      currency: params.currency || config.payroll.defaultCurrency,
       allowances: (params.allowances || []).map((a) => ({
         type: a.type || 'other',
         name: a.name || a.type || 'other',
@@ -393,18 +414,18 @@ export class EmployeeBuilder {
   /**
    * Build employee data
    */
-  build(): EmployeeData {
-    if (!this.data.userId || !this.data.organizationId) {
-      throw new Error('userId and organizationId are required');
+  build(config: HRMConfig = HRM_CONFIG): EmployeeData {
+    if (!this.data.organizationId) {
+      throw new Error('organizationId is required');
     }
-    if (!this.data.employment?.employeeId || !this.data.employment?.position) {
-      throw new Error('employeeId and position are required');
+    if (!this.data.employment?.position) {
+      throw new Error('position is required');
     }
     if (!this.data.compensation?.baseAmount) {
       throw new Error('baseAmount is required');
     }
 
-    return EmployeeFactory.create(this.data as CreateEmployeeParams);
+    return EmployeeFactory.create(this.data as CreateEmployeeParams, config);
   }
 }
 

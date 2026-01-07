@@ -30,7 +30,7 @@ const organizationSchema = new Schema({
   settings: {
     currency: { type: String, default: 'USD' },
     country: { type: String, default: 'US' },
-    workDays: { type: [Number], default: [1, 2, 3, 4, 5] }, // Mon-Fri
+    workingDays: { type: [Number], default: [1, 2, 3, 4, 5] }, // Mon-Fri
     hoursPerDay: { type: Number, default: 8 },
     payDay: { type: Number, default: 28 },
   },
@@ -201,7 +201,7 @@ export class HRMService {
 
     // Count working days
     const workDays = countWorkingDays(period, periodEnd, {
-      workDays: [1, 2, 3, 4, 5],
+      workingDays: [1, 2, 3, 4, 5],
       holidays,
     });
 
@@ -328,7 +328,7 @@ await payroll.processSalary({
   year,
   options: {
     holidays: [new Date('2024-12-25')],
-    workSchedule: { workDays: [1, 2, 3, 4, 5], hoursPerDay: 8 },
+    workSchedule: { workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8 },
     skipTax: true,
     skipAttendance: true,
     skipProration: true,
@@ -363,12 +363,12 @@ Built-in support for multiple countries:
 import { COUNTRY_DEFAULTS } from '@classytic/payroll/core';
 
 // Bangladesh (Sun-Thu work week)
-COUNTRY_DEFAULTS.BD 
-// { currency: 'BDT', workDays: [0,1,2,3,4], taxBrackets: [...] }
+COUNTRY_DEFAULTS.BD
+// { currency: 'BDT', workingDays: [0,1,2,3,4], taxBrackets: [...] }
 
 // India (Mon-Sat work week)
-COUNTRY_DEFAULTS.IN 
-// { currency: 'INR', workDays: [1,2,3,4,5,6], taxBrackets: [...] }
+COUNTRY_DEFAULTS.IN
+// { currency: 'INR', workingDays: [1,2,3,4,5,6], taxBrackets: [...] }
 
 // Use in organization settings
 await Organization.create({
@@ -376,7 +376,7 @@ await Organization.create({
   settings: {
     currency: 'BDT',
     country: 'BD',
-    workDays: [0, 1, 2, 3, 4],
+    workingDays: [0, 1, 2, 3, 4],
   },
 });
 ```

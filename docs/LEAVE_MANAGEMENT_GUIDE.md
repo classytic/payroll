@@ -96,7 +96,7 @@ const leaveService = createLeaveService({
     enforceBalance: true,    // Validate balance (default: true)
     checkOverlap: true,      // Check conflicts (default: true)
     workingDaysOptions: {
-      workDays: [1, 2, 3, 4, 5],  // Mon-Fri
+      workingDays: [1, 2, 3, 4, 5],  // Mon-Fri
       holidays: [new Date('2024-12-25')],
     },
   },

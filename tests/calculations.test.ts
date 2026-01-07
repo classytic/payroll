@@ -44,7 +44,7 @@ describe('countWorkingDays', () => {
     const result = countWorkingDays(
       new Date('2024-01-01'),
       new Date('2024-01-31'),
-      { workDays: [0, 1, 2, 3, 4] } // Sunday to Thursday
+      { workingDays: [0, 1, 2, 3, 4] } // Sunday to Thursday
     );
 
     expect(result.totalDays).toBe(31);
@@ -375,7 +375,7 @@ describe('getPayPeriod', () => {
 
 describe('DEFAULT_WORK_SCHEDULE', () => {
   it('should have Mon-Fri as default', () => {
-    expect(DEFAULT_WORK_SCHEDULE.workDays).toEqual([1, 2, 3, 4, 5]);
+    expect(DEFAULT_WORK_SCHEDULE.workingDays).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('should have 8 hours per day', () => {

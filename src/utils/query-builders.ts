@@ -193,6 +193,34 @@ export class EmployeeQueryBuilder extends QueryBuilder {
   }
 
   /**
+   * Filter by employeeId (human-readable ID)
+   */
+  forEmployeeId(employeeId: string): this {
+    return this.where('employeeId', employeeId);
+  }
+
+  /**
+   * Filter by email (for guest employees)
+   */
+  forEmail(email: string): this {
+    return this.where('email', email.toLowerCase().trim());
+  }
+
+  /**
+   * Filter guest employees (no userId)
+   */
+  guestEmployees(): this {
+    return this.where('userId', null);
+  }
+
+  /**
+   * Filter user-linked employees (has userId)
+   */
+  userLinkedEmployees(): this {
+    return this.where('userId', { $ne: null } as unknown as mongoose.Types.ObjectId);
+  }
+
+  /**
    * Filter by status(es)
    */
   withStatus(...statuses: EmployeeStatus[]): this {

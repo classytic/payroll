@@ -42,6 +42,7 @@ export type {
   SalaryConfig,
   EmploymentConfig,
   ValidationConfig,
+  EmployeeIdentityMode,
   TaxBracket,
   SalaryBandRange,
   RoleMappingConfig,
@@ -59,6 +60,7 @@ export type {
   PayrollStats,
   PayrollPeriod,
   PayrollBreakdown,
+  PayrollCorrection,
   EmploymentHistoryEntry,
   UserReference,
 
@@ -74,6 +76,7 @@ export type {
   PaymentFrequency,
   SalaryBand,
   OrgRole,
+  HRMTransactionCategory,
   LeaveType,
   LeaveRequestStatus,
 
@@ -219,6 +222,22 @@ export {
   employeePlugin,
   type EmployeePluginOptions,
 } from './plugins/index.js';
+
+// ============================================================================
+// Factories (data builders)
+// ============================================================================
+
+export {
+  EmployeeFactory,
+  EmployeeBuilder,
+  createEmployee,
+} from './factories/employee.factory.js';
+
+export type {
+  CreateEmployeeParams,
+  EmployeeData,
+  TerminationData,
+} from './factories/employee.factory.js';
 
 // ============================================================================
 // Errors

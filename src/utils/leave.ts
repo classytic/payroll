@@ -62,7 +62,7 @@ export function calculateLeaveDays(
   options: WorkingDaysOptions = {}
 ): number {
   const {
-    workDays = [1, 2, 3, 4, 5], // Mon-Fri by default
+    workingDays = [1, 2, 3, 4, 5], // Mon-Fri by default
     holidays = [],
     includeEndDate = true,
   } = options;
@@ -81,7 +81,7 @@ export function calculateLeaveDays(
   }
 
   while (current <= end) {
-    const isWorkDay = workDays.includes(current.getDay());
+    const isWorkDay = workingDays.includes(current.getDay());
     const isHoliday = holidaySet.has(current.toDateString());
 
     if (isWorkDay && !isHoliday) {

@@ -106,7 +106,7 @@ describe('calculateLeaveDays', () => {
     const days = calculateLeaveDays(
       new Date('2024-03-03'), // Sunday
       new Date('2024-03-09'), // Saturday
-      { workDays: [0, 1, 2, 3, 4] } // Sun-Thu
+      { workingDays: [0, 1, 2, 3, 4] } // Sun-Thu
     );
     // Sun(3), Mon(4), Tue(5), Wed(6), Thu(7) = 5 working days
     expect(days).toBe(5);

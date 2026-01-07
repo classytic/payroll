@@ -18,7 +18,7 @@
 /** Work schedule configuration */
 export interface WorkSchedule {
   /** Working days (0=Sun, 1=Mon, ..., 6=Sat). Default: Mon-Fri */
-  workDays: number[];
+  workingDays: number[];
   /** Hours per work day. Default: 8 */
   hoursPerDay: number;
 }
@@ -123,7 +123,7 @@ export const DEFAULT_TAX_BRACKETS: Array<{ min: number; max: number; rate: numbe
 ];
 
 export const DEFAULT_WORK_SCHEDULE: WorkSchedule = {
-  workDays: [1, 2, 3, 4, 5], // Monday to Friday
+  workingDays: [1, 2, 3, 4, 5], // Monday to Friday
   hoursPerDay: 8,
 };
 
@@ -138,18 +138,18 @@ export const DEFAULT_WORK_SCHEDULE: WorkSchedule = {
  * const result = countWorkingDays(
  *   new Date('2024-03-01'),
  *   new Date('2024-03-31'),
- *   { workDays: [1,2,3,4,5], holidays: companyHolidays }
+ *   { workingDays: [1,2,3,4,5], holidays: companyHolidays }
  * );
  */
 export function countWorkingDays(
   startDate: Date,
   endDate: Date,
   options: {
-    workDays?: number[];
+    workingDays?: number[];
     holidays?: Date[];
   } = {}
 ): WorkingDaysResult {
-  const workDays = options.workDays || DEFAULT_WORK_SCHEDULE.workDays;
+  const workDays = options.workingDays || DEFAULT_WORK_SCHEDULE.workingDays;
   const holidaySet = new Set(
     (options.holidays || []).map(d => new Date(d).toDateString())
   );
@@ -329,7 +329,7 @@ export function calculateSalaryBreakdown(params: {
   // 1. Calculate working days
   const workSchedule = { ...DEFAULT_WORK_SCHEDULE, ...options.workSchedule };
   const workingDays = countWorkingDays(periodStart, periodEnd, {
-    workDays: workSchedule.workDays,
+    workingDays: workSchedule.workingDays,
     holidays: options.holidays,
   });
 

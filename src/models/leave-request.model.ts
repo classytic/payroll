@@ -35,7 +35,7 @@ const leaveRequestSchema = new Schema(
     },
     userId: {
       type: Schema.Types.ObjectId,
-      required: true,
+      required: false,  // Optional for guest employees
       ref: 'User',
     },
     type: {

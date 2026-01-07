@@ -16,6 +16,7 @@ import type {
   EmploymentType,
   PaymentFrequency,
   DeepPartial,
+  EmployeeIdentityMode,
 } from './types.js';
 
 // ============================================================================
@@ -54,9 +55,9 @@ export const HRM_CONFIG: HRMConfig = {
 
   validation: {
     requireBankDetails: false,
-    requireEmployeeId: true,
-    uniqueEmployeeIdPerOrg: true,
-    allowMultiTenantEmployees: true,
+    requireUserId: false,           // Modern: Allow guest employees by default
+    identityMode: 'employeeId',     // Modern: Use human-readable IDs as primary
+    identityFallbacks: ['email', 'userId'],  // Smart fallback chain
   },
 };
 
@@ -271,7 +272,12 @@ export function mergeConfig(
     payroll: { ...HRM_CONFIG.payroll, ...customConfig.payroll },
     salary: { ...HRM_CONFIG.salary, ...customConfig.salary },
     employment: { ...HRM_CONFIG.employment, ...customConfig.employment },
-    validation: { ...HRM_CONFIG.validation, ...customConfig.validation },
+    validation: {
+      ...HRM_CONFIG.validation,
+      ...customConfig.validation,
+      // Ensure fallbacks is always EmployeeIdentityMode[]
+      identityFallbacks: (customConfig.validation?.identityFallbacks ?? HRM_CONFIG.validation.identityFallbacks) as EmployeeIdentityMode[]
+    },
   };
 }
 

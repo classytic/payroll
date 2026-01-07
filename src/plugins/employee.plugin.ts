@@ -616,7 +616,10 @@ export function employeePlugin(
 
   if (options.createIndexes) {
     schema.index({ organizationId: 1, employeeId: 1 }, { unique: true });
-    schema.index({ userId: 1, organizationId: 1 }, { unique: true });
+    // Sparse unique index: Allows multiple guest employees (userId=null) per org
+    schema.index({ userId: 1, organizationId: 1 }, { unique: true, sparse: true });
+    // Email lookup for guest employees
+    schema.index({ email: 1, organizationId: 1 }, { sparse: true });
     schema.index({ organizationId: 1, status: 1 });
     schema.index({ organizationId: 1, department: 1 });
     schema.index({ organizationId: 1, 'compensation.netSalary': -1 });

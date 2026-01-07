@@ -380,7 +380,7 @@ describe('Pro-Rating with Attendance', () => {
     const expected = countWorkingDays(
       new Date('2024-03-15'),
       new Date('2024-03-31'),
-      { workDays: [1, 2, 3, 4, 5] }
+      { workingDays: [1, 2, 3, 4, 5] }
     ).workingDays;
 
     // Create attendance record that matches perfect attendance for the active range

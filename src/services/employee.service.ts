@@ -13,18 +13,27 @@ import type {
   EmploymentType,
   Compensation,
   OperationContext,
+  HRMConfig,
 } from '../types.js';
 import { EmployeeFactory, type CreateEmployeeParams } from '../factories/employee.factory.js';
 import { employee as employeeQuery, toObjectId } from '../utils/query-builders.js';
 import { isActive, isEmployed, canReceiveSalary } from '../utils/validation.js';
 import { logger } from '../utils/logger.js';
+import { HRM_CONFIG } from '../config.js';
 
 // ============================================================================
 // Employee Service
 // ============================================================================
 
 export class EmployeeService {
-  constructor(private readonly EmployeeModel: Model<EmployeeDocument>) {}
+  private readonly config: HRMConfig;
+
+  constructor(
+    private readonly EmployeeModel: Model<EmployeeDocument>,
+    config?: HRMConfig
+  ) {
+    this.config = config || HRM_CONFIG;
+  }
 
   /**
    * Find employee by ID
@@ -65,6 +74,71 @@ export class EmployeeService {
       mongooseQuery = mongooseQuery.session(options.session);
     }
     
+    return mongooseQuery.exec();
+  }
+
+  /**
+   * Find employee by employeeId (human-readable ID)
+   */
+  async findByEmployeeId(
+    employeeId: string,
+    organizationId: ObjectIdLike,
+    options: { session?: ClientSession } = {}
+  ): Promise<EmployeeDocument | null> {
+    const query = employeeQuery()
+      .forEmployeeId(employeeId)
+      .forOrganization(organizationId)
+      .build();
+
+    let mongooseQuery = this.EmployeeModel.findOne(query);
+
+    if (options.session) {
+      mongooseQuery = mongooseQuery.session(options.session);
+    }
+
+    return mongooseQuery.exec();
+  }
+
+  /**
+   * Find employee by email (guest employees)
+   */
+  async findByEmail(
+    email: string,
+    organizationId: ObjectIdLike,
+    options: { session?: ClientSession } = {}
+  ): Promise<EmployeeDocument | null> {
+    const query = employeeQuery()
+      .forEmail(email)
+      .forOrganization(organizationId)
+      .build();
+
+    let mongooseQuery = this.EmployeeModel.findOne(query);
+
+    if (options.session) {
+      mongooseQuery = mongooseQuery.session(options.session);
+    }
+
+    return mongooseQuery.exec();
+  }
+
+  /**
+   * Find all guest employees (no userId)
+   */
+  async findGuestEmployees(
+    organizationId: ObjectIdLike,
+    options: { session?: ClientSession } = {}
+  ): Promise<EmployeeDocument[]> {
+    const query = employeeQuery()
+      .forOrganization(organizationId)
+      .guestEmployees()
+      .build();
+
+    let mongooseQuery = this.EmployeeModel.find(query);
+
+    if (options.session) {
+      mongooseQuery = mongooseQuery.session(options.session);
+    }
+
     return mongooseQuery.exec();
   }
 
@@ -162,11 +236,49 @@ export class EmployeeService {
     params: CreateEmployeeParams,
     options: { session?: ClientSession } = {}
   ): Promise<EmployeeDocument> {
-    const employeeData = EmployeeFactory.create(params);
-    
-    const [employee] = await this.EmployeeModel.create([employeeData], {
-      session: options.session,
-    });
+    const employeeData = EmployeeFactory.create(params, this.config);
+
+    let employee: EmployeeDocument;
+
+    // For guest employees, use insertOne to avoid Mongoose setting undefined fields to null
+    // This ensures partial indexes work correctly (partial index only includes docs with userId)
+    if (!params.userId) {
+      // Guest employee - use direct MongoDB insertOne to preserve partial index behavior
+      const dataToInsert: Record<string, any> = {};
+
+      // Copy all fields from employeeData except userId/email which need special handling
+      for (const [key, value] of Object.entries(employeeData)) {
+        if (key === 'userId' || key === 'email') continue;
+        dataToInsert[key] = value;
+      }
+
+      // Only include email if it exists and is not empty (critical for partial index)
+      if (employeeData.email && employeeData.email !== '') {
+        dataToInsert.email = employeeData.email;
+      }
+
+      // NEVER include userId for guest employees (partial index excludes docs without userId)
+      // Add timestamps manually since we're bypassing Mongoose
+      const now = new Date();
+      dataToInsert.createdAt = now;
+      dataToInsert.updatedAt = now;
+
+      // Use direct MongoDB insertOne
+      const insertOptions = options.session ? { session: options.session as any } : {};
+      const result = await this.EmployeeModel.collection.insertOne(
+        dataToInsert,
+        insertOptions
+      );
+
+      // Convert back to Mongoose document
+      employee = await this.EmployeeModel.findById(result.insertedId).session(options.session || null).exec() as EmployeeDocument;
+    } else {
+      // Regular employee with userId - use Mongoose create
+      const [created] = await this.EmployeeModel.create([employeeData], {
+        session: options.session,
+      });
+      employee = created;
+    }
 
     logger.info('Employee created', {
       employeeId: employee.employeeId,
@@ -342,8 +454,9 @@ export class EmployeeService {
  * Create employee service instance
  */
 export function createEmployeeService(
-  EmployeeModel: Model<EmployeeDocument>
+  EmployeeModel: Model<EmployeeDocument>,
+  config?: HRMConfig
 ): EmployeeService {
-  return new EmployeeService(EmployeeModel);
+  return new EmployeeService(EmployeeModel, config);
 }
 

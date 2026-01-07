@@ -45,6 +45,8 @@ const breakdownSchema = new Schema(
     actualDays: { type: Number },
     proRatedAmount: { type: Number, default: 0 },
     attendanceDeduction: { type: Number, default: 0 },
+    overtimeAmount: { type: Number, default: 0 },
+    bonusAmount: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -74,7 +76,7 @@ const payrollRecordSchema = new Schema(
     },
     userId: {
       type: Schema.Types.ObjectId,
-      required: true,
+      required: false,  // Optional for guest employees
       ref: 'User',
     },
     period: {

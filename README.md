@@ -11,9 +11,10 @@ Enterprise-grade payroll for Mongoose. Simple, powerful, production-ready.
 | Feature | Description | Status |
 |---------|-------------|--------|
 | **Employee Management** | Hire, terminate, re-hire, update employment | ✅ Production-ready |
+| **Guest Employee Identity** | Employees without userId, flexible identity lookups | ✅ **NEW** Production-ready |
 | **Compensation** | Base salary, allowances, deductions, bank details | ✅ Production-ready |
 | **Payroll Processing** | Monthly salary with automatic calculations | ✅ Production-ready |
-| **Shift Compliance** | Late penalties, overtime bonuses, progressive discipline | ✅ **NEW** Production-ready |
+| **Shift Compliance** | Late penalties, overtime bonuses, progressive discipline | ✅ Production-ready |
 | **Bulk Processing** | Concurrency, progress tracking, cancellation | ✅ Production-ready |
 | **Streaming Mode** | Cursor-based processing for millions (auto-detect) | ✅ Production-ready |
 | **Attendance Integration** | Native `@classytic/clockin` support for absences | ✅ Production-ready |
@@ -138,6 +139,423 @@ console.log(result.payrollRecord.breakdown);
 //   attendanceDeduction: 9090
 // }
 ```
+
+## Guest Employee Identity System
+
+Modern HRM needs flexibility in how employees are identified. Not all employees have user accounts — drivers, contractors, and temporary workers often don't need system access.
+
+### Features
+
+- **Guest Employees**: Create employees without userId (no user account required)
+- **Flexible Identity Modes**: Lookup by userId, employeeId, email, or any
+- **Smart Fallback Chain**: Automatic fallback if primary lookup fails
+- **Partial Indexes**: Multiple guest employees per organization (userId field completely absent)
+- **Email Normalization**: Case-insensitive email lookup (lowercase + trim)
+- **Email Reuse**: Terminated employees' emails can be reused for rehiring
+- **Mixed Workforce**: User-linked and guest employees in the same payroll
+
+### Configuration
+
+```typescript
+import { createPayrollInstance } from '@classytic/payroll';
+
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+  .withConfig({
+    validation: {
+      requireUserId: false,              // Allow guest employees (default: false)
+      identityMode: 'employeeId',        // Primary lookup mode (default: 'employeeId')
+      identityFallbacks: ['email', 'userId'], // Fallback chain (default: ['email', 'userId'])
+    },
+  })
+  .build();
+```
+
+### Identity Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `employeeId` | Human-readable ID (e.g., "EMP-001") | Primary mode for all employees |
+| `email` | Email address | Guest employees without userId |
+| `userId` | MongoDB ObjectId of user account | Traditional user-linked employees |
+| `any` | Try all modes | Flexible lookup when identity type unknown |
+
+### Creating Guest Employees
+
+#### Using Payroll Instance (Recommended)
+
+```typescript
+// Guest employee without user account
+const driver = await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'DRIVER-001',        // Required: human-readable ID
+    email: 'john@company.com',       // Optional: for guest employee identification
+    name: 'John Driver',
+    position: 'Delivery Driver',
+    department: 'operations',
+    type: 'contract',
+    joinDate: new Date(),
+  },
+  compensation: {
+    baseAmount: 3000,
+    currency: 'USD',
+    frequency: 'monthly',
+  },
+});
+
+console.log(driver.userId);  // undefined
+console.log(driver.email);   // 'john@company.com' (normalized: lowercase + trimmed)
+console.log(driver.employeeId); // 'DRIVER-001'
+```
+
+#### Using Employee Factory (Advanced)
+
+For direct data creation without payroll instance:
+
+```typescript
+import { EmployeeFactory, type CreateEmployeeParams } from '@classytic/payroll';
+
+// Create employee data object
+const employeeData = EmployeeFactory.create({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'DRIVER-001',
+    email: 'john@company.com',
+    position: 'Delivery Driver',
+    department: 'operations',
+    type: 'contract',
+    hireDate: new Date(),
+  },
+  compensation: {
+    baseAmount: 3000,
+    currency: 'USD',
+    frequency: 'monthly',
+  },
+});
+
+// Use with Mongoose model
+const employee = await Employee.create(employeeData);
+```
+
+#### Using Employee Builder (Fluent API)
+
+```typescript
+import { createEmployee } from '@classytic/payroll';
+
+// Fluent builder pattern
+const employeeData = createEmployee()
+  .inOrganization(org._id)
+  .withEmployeeId('DRIVER-001')
+  .asPosition('Delivery Driver')
+  .inDepartment('operations')
+  .withEmploymentType('contract')
+  .withBaseSalary(3000, 'monthly', 'USD')
+  .build();
+
+const employee = await Employee.create(employeeData);
+```
+
+**Note**: Factory and Builder create data objects only. Use `payroll.hire()` for full hiring workflow with validation and event emission.
+
+### Creating User-Linked Employees
+
+```typescript
+// Traditional employee with user account
+const manager = await payroll.hire({
+  userId: user._id,                   // User account reference
+  organizationId: org._id,
+  employment: {
+    employeeId: 'MGR-001',
+    name: 'Jane Manager',
+    position: 'HR Manager',
+    department: 'hr',
+    type: 'full_time',
+    joinDate: new Date(),
+  },
+  compensation: {
+    baseAmount: 8000,
+    currency: 'USD',
+    frequency: 'monthly',
+  },
+});
+```
+
+### Looking Up Employees
+
+```typescript
+// By employeeId (primary mode, works for both guest and user-linked)
+const employee = await payroll.getEmployeeByIdentity({
+  identity: 'DRIVER-001',
+  organizationId: org._id,
+});
+
+// By email (for guest employees) - case-insensitive!
+const driver = await payroll.getEmployeeByIdentity({
+  identity: 'JOHN@COMPANY.COM',  // Works! Normalized to lowercase internally
+  organizationId: org._id,
+  mode: 'email',
+});
+
+// By userId (for user-linked employees)
+const manager = await payroll.getEmployeeByIdentity({
+  identity: user._id,
+  organizationId: org._id,
+  mode: 'userId',
+});
+
+// Auto mode - tries all identity methods
+const anyEmployee = await payroll.getEmployeeByIdentity({
+  identity: 'DRIVER-001',  // Could be employeeId, email, or userId
+  organizationId: org._id,
+  mode: 'any',
+});
+```
+
+### Fallback Chain Example
+
+```typescript
+// With default config: identityMode: 'employeeId', fallbacks: ['email', 'userId']
+const employee = await payroll.getEmployeeByIdentity({
+  identity: 'john@company.com',  // Not an employeeId
+  organizationId: org._id,
+  // 1. Tries employeeId lookup → fails
+  // 2. Falls back to email → success!
+});
+```
+
+### Payroll Processing for Guest Employees
+
+```typescript
+// Process salary for guest employee (same API!)
+const result = await payroll.processSalary({
+  employeeId: driver._id,
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+
+// Transaction is created without userId
+console.log(result.transaction.userId);      // undefined
+console.log(result.transaction.employeeId);  // driver._id
+console.log(result.transaction.metadata.email); // 'john@company.com'
+console.log(result.transaction.sourceId);    // payrollRecord._id
+console.log(result.transaction.sourceModel); // 'PayrollRecord'
+```
+
+### Bulk Payroll with Mixed Employees
+
+```typescript
+// Works seamlessly with both guest and user-linked employees
+const result = await payroll.processBulkPayroll({
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+
+console.log(result.total);       // All employees (guest + user-linked)
+console.log(result.successful);  // Successfully processed
+console.log(result.failed);      // Failed employees
+```
+
+### Database Schema & Implementation
+
+The system uses **partial unique indexes** with explicit filter expressions to allow multiple guest employees. This is a critical technical detail:
+
+**Why Partial Indexes (Not Sparse)?**
+- Compound sparse indexes don't work correctly when one field (organizationId) is always present
+- MongoDB treats missing fields as `null` in compound sparse indexes, causing duplicate key errors
+- Partial indexes with `partialFilterExpression` explicitly control which documents are included
+
+```typescript
+// Partial index - only includes documents WITH userId field
+// Guest employees (no userId field) are completely excluded from this index
+{
+  fields: { userId: 1, organizationId: 1 },
+  options: {
+    unique: true,
+    partialFilterExpression: { userId: { $exists: true } }
+  }
+}
+
+// Partial index - only includes active employees with email
+// This allows email reuse when employees are terminated
+{
+  fields: { email: 1, organizationId: 1 },
+  options: {
+    unique: true,
+    partialFilterExpression: {
+      email: { $exists: true },
+      status: { $in: ['active', 'on_leave', 'suspended'] }
+    }
+  }
+}
+
+// Always unique - human-readable IDs (all employees)
+{ fields: { employeeId: 1, organizationId: 1 }, options: { unique: true } }
+```
+
+**Implementation Details (Advanced):**
+- Guest employees use MongoDB's `collection.insertOne()` directly instead of Mongoose's `Model.create()`
+- This prevents Mongoose from setting undefined fields to `null` before pre-save hooks run
+- Ensures partial indexes work correctly (they only skip documents where fields are completely absent)
+- Emails are normalized at the EmployeeFactory level (lowercase + trim) for consistent storage and case-insensitive lookup
+
+### Validation Rules
+
+```typescript
+// At least ONE identity field required
+✅ employeeId only
+✅ email only
+✅ userId only
+✅ employeeId + email
+✅ userId + employeeId
+❌ No identity fields
+
+// Uniqueness per organization
+✅ Multiple guest employees (no userId field) in same org
+✅ Same userId in different organizations
+✅ Email reuse after termination (status: 'terminated')
+❌ Duplicate employeeId in same org
+❌ Duplicate email in same org for active employees
+❌ Duplicate userId in same org
+
+// Email normalization (automatic)
+'John@Company.COM  ' → 'john@company.com'
+'  ADMIN@SITE.COM'   → 'admin@site.com'
+```
+
+### Strict Mode
+
+If you want to require userId for all employees:
+
+```typescript
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+  .withConfig({
+    validation: {
+      requireUserId: true,  // Enforce user accounts
+    },
+  })
+  .build();
+
+// This will throw ValidationError
+await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'DRIVER-001',
+    email: 'driver@company.com',
+    // Missing userId - will fail!
+  },
+  compensation: { baseAmount: 3000, currency: 'USD' },
+});
+```
+
+### Real-World Use Cases
+
+**1. Delivery Company**
+```typescript
+// Drivers without system access
+const driver = await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'DRV-' + Date.now(),
+    email: 'driver@company.com',
+    name: 'John Driver',
+    position: 'Delivery Driver',
+    department: 'operations',
+    type: 'contract',
+  },
+  compensation: { baseAmount: 3000, currency: 'USD' },
+});
+```
+
+**2. Manufacturing Plant**
+```typescript
+// Factory workers with employee badges
+const worker = await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'BADGE-12345',  // Physical badge number
+    name: 'Worker Name',
+    position: 'Assembly Line Worker',
+    department: 'production',
+    type: 'full_time',
+  },
+  compensation: { baseAmount: 4000, currency: 'USD' },
+});
+```
+
+**3. Restaurant Chain**
+```typescript
+// Kitchen staff and servers
+const staff = await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'SERVER-042',
+    email: 'server042@restaurant.com',
+    name: 'Server Name',
+    position: 'Server',
+    department: 'operations',
+    type: 'part_time',
+  },
+  compensation: { baseAmount: 2000, currency: 'USD', frequency: 'monthly' },
+});
+```
+
+### Migration from User-Only System
+
+If you're migrating from a system that requires userId:
+
+```typescript
+// Step 1: Update config to allow guest employees
+const payroll = createPayrollInstance()
+  .withConfig({ validation: { requireUserId: false } })
+  .build();
+
+// Step 2: Existing employees still work (they have userId)
+const existing = await payroll.getEmployeeByIdentity({
+  identity: user._id,
+  organizationId: org._id,
+});
+
+// Step 3: Start adding guest employees
+const newGuest = await payroll.hire({
+  organizationId: org._id,
+  employment: {
+    employeeId: 'CONTRACT-001',
+    email: 'contractor@company.com',  // Automatically normalized
+    // No userId needed!
+  },
+  compensation: { baseAmount: 5000, currency: 'USD' },
+});
+```
+
+**Database Migration Notes:**
+1. **Index Migration Required**: If you have existing sparse indexes, you need to drop them and create partial indexes:
+   ```javascript
+   // Drop old sparse index
+   await Employee.collection.dropIndex('userId_1_organizationId_1');
+
+   // Create new partial index
+   await Employee.collection.createIndex(
+     { userId: 1, organizationId: 1 },
+     {
+       unique: true,
+       partialFilterExpression: { userId: { $exists: true } }
+     }
+   );
+   ```
+
+2. **Email Normalization**: Existing emails should be normalized:
+   ```javascript
+   // Normalize all existing emails
+   const employees = await Employee.find({ email: { $exists: true } });
+   for (const emp of employees) {
+     emp.email = emp.email.trim().toLowerCase();
+     await emp.save();
+   }
+   ```
 
 ## Unified Cashflow Model (Transactions)
 
@@ -276,7 +694,7 @@ await payroll.processSalary({
   year: 2024,
   options: {
     holidays: [new Date('2024-03-17')],
-    workSchedule: { workDays: [1, 2, 3, 4, 5], hoursPerDay: 8 },
+    workSchedule: { workingDays: [1, 2, 3, 4, 5], hoursPerDay: 8 },
     skipTax: true,
     skipAttendance: true,
     skipProration: true,
@@ -951,7 +1369,7 @@ createLeaveService({
 
     // Working days
     workingDaysOptions: {
-      workDays: [1, 2, 3, 4, 5],  // Mon-Fri (default)
+      workingDays: [1, 2, 3, 4, 5],  // Mon-Fri (default)
       holidays: [new Date('2024-12-25')],
     },
 
