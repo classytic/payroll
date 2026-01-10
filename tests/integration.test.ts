@@ -155,15 +155,16 @@ describe('Schema Integration', () => {
 
     await employee.save();
 
-    // Payroll fields
-    expect(employee.employeeId).toBeDefined();
-    expect(employee.position).toBe('Engineer');
-    expect(employee.compensation.baseAmount).toBe(100000);
-    expect(employee.status).toBe('active');
+    // Payroll fields (cast to any due to dynamic schema merging)
+    const emp = employee as any;
+    expect(emp.employeeId).toBeDefined();
+    expect(emp.position).toBe('Engineer');
+    expect(emp.compensation.baseAmount).toBe(100000);
+    expect(emp.status).toBe('active');
 
     // ClockIn fields
-    expect(employee.attendanceEnabled).toBe(true);
-    expect(employee.attendanceStats).toBeDefined();
+    expect(emp.attendanceEnabled).toBe(true);
+    expect(emp.attendanceStats).toBeDefined();
 
     // Payroll plugin methods
     expect(typeof (employee as any).canReceiveSalary).toBe('function');
@@ -212,7 +213,7 @@ describe('Payroll + Attendance Flow', () => {
     // Create attendance (ClockIn format)
     // March 2024 has 21 working days, we'll record 20 days worked (1 day absent)
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -280,6 +281,124 @@ describe('Payroll + Attendance Flow', () => {
       year: 2024,
     });
 
+    expect(result.payrollRecord.breakdown.attendanceDeduction).toBe(0);
+  });
+
+  it('should auto-fetch attendance from DB when not passed explicitly', async () => {
+    // Create payroll with attendanceIntegration enabled
+    const autoFetchPayroll = createPayrollInstance()
+      .withModels({
+        EmployeeModel: Employee,
+        PayrollRecordModel: PayrollRecord,
+        TransactionModel: Transaction,
+        AttendanceModel: Attendance,
+      })
+      .withConfig({
+        payroll: {
+          attendanceIntegration: true, // Enable auto-fetch
+        },
+      })
+      .build();
+
+    const employee = await autoFetchPayroll.hire({
+      userId: user,
+      organizationId: org,
+      employment: {
+        position: 'Engineer',
+        department: 'it',
+        type: 'full_time',
+        hireDate: new Date('2024-01-01'),
+      },
+      compensation: { baseAmount: 110000, currency: 'USD' },
+    });
+
+    // Create attendance record in DB (using organizationId)
+    await Attendance.create({
+      organizationId: org,
+      targetId: employee._id,
+      targetModel: 'Employee',
+      year: 2024,
+      month: 3,
+      monthlyTotal: 20,
+      uniqueDaysVisited: 20,
+      fullDaysCount: 18,
+      halfDaysCount: 2,
+      paidLeaveDaysCount: 1,
+      overtimeDaysCount: 0,
+      totalWorkDays: 20, // 18 full + (2 × 0.5) + 1 leave = 20
+      checkIns: [],
+      visitedDays: [],
+    });
+
+    // Process salary WITHOUT passing attendance - should auto-fetch from DB
+    const result = await autoFetchPayroll.processSalary({
+      employeeId: employee._id,
+      organizationId: org,
+      month: 3,
+      year: 2024,
+      // attendance NOT passed - should be auto-fetched!
+    });
+
+    // Verify attendance was auto-fetched and deduction calculated
+    // Expected working days in March 2024 = 21 (Mon-Fri, excluding weekends)
+    // Actual worked = 20 (from totalWorkDays in attendance record)
+    // 1 absent day = deduction of ~5238 (110000 / 21)
+    expect(result.payrollRecord.breakdown.attendanceDeduction).toBeGreaterThan(0);
+    expect(result.payrollRecord.breakdown.attendanceDeduction).toBeCloseTo(5238, -2);
+  });
+
+  it('should prioritize explicit attendance over auto-fetch', async () => {
+    const autoFetchPayroll = createPayrollInstance()
+      .withModels({
+        EmployeeModel: Employee,
+        PayrollRecordModel: PayrollRecord,
+        TransactionModel: Transaction,
+        AttendanceModel: Attendance,
+      })
+      .withConfig({
+        payroll: {
+          attendanceIntegration: true,
+        },
+      })
+      .build();
+
+    const employee = await autoFetchPayroll.hire({
+      userId: user,
+      organizationId: org,
+      employment: {
+        position: 'Engineer',
+        department: 'it',
+        type: 'full_time',
+        hireDate: new Date('2024-01-01'),
+      },
+      compensation: { baseAmount: 100000, currency: 'USD' },
+    });
+
+    // Create attendance in DB with 15 days worked
+    await Attendance.create({
+      organizationId: org,
+      targetId: employee._id,
+      targetModel: 'Employee',
+      year: 2024,
+      month: 4,
+      totalWorkDays: 15, // DB says 15 days
+      checkIns: [],
+      visitedDays: [],
+    });
+
+    // Pass explicit attendance with 22 days (full attendance)
+    const result = await autoFetchPayroll.processSalary({
+      employeeId: employee._id,
+      organizationId: org,
+      month: 4,
+      year: 2024,
+      attendance: {
+        expectedDays: 22,
+        actualDays: 22, // Explicit: full attendance
+      },
+    });
+
+    // Should use explicit attendance (no deduction), not DB (which has 15 days)
     expect(result.payrollRecord.breakdown.attendanceDeduction).toBe(0);
   });
 });
@@ -390,7 +509,7 @@ describe('Pro-Rating with Attendance', () => {
 
     // Create attendance record that matches perfect attendance for the active range
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -530,7 +649,7 @@ describe('ClockIn → Payroll End-to-End Flow', () => {
     // 2. Simulate ClockIn recording attendance over the month
     // This mimics what ClockIn.checkIn.record() would create
     const attendanceRecord = await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -594,7 +713,7 @@ describe('ClockIn → Payroll End-to-End Flow', () => {
 
     // Perfect attendance - all 22 days worked
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -646,7 +765,7 @@ describe('ClockIn → Payroll End-to-End Flow', () => {
 
     // Employee worked overtime
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -993,7 +1112,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     // Many half days
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -1049,7 +1168,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     // Employee took paid leave
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,
@@ -1103,7 +1222,7 @@ describe('Multiple Attendance Scenarios', () => {
 
     // Employee was mostly absent
     await Attendance.create({
-      tenantId: org,
+      organizationId: org,
       targetId: employee._id,
       targetModel: 'Employee',
       year: 2024,

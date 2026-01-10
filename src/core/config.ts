@@ -69,8 +69,11 @@ export interface TaxResult {
 
 /** Attendance data (from YOUR attendance system) */
 export interface AttendanceInput {
-  /** Expected work days in period */
-  expectedDays: number;
+  /**
+   * Expected work days in period.
+   * If not provided, derived from employee's workSchedule and period dates.
+   */
+  expectedDays?: number;
   /** Actual days worked */
   actualDays: number;
 }
@@ -358,9 +361,11 @@ export function calculateSalaryBreakdown(params: {
   // 6. Attendance deduction
   let attendanceDeduction = 0;
   if (attendance && !options.skipAttendance && workingDays.workingDays > 0) {
-    const dailyRate = proratedBase / workingDays.workingDays;
+    // Use expectedDays from attendance if provided, otherwise use working days from schedule
+    const expectedDays = attendance.expectedDays ?? workingDays.workingDays;
+    const dailyRate = proratedBase / expectedDays;
     attendanceDeduction = calculateAttendanceDeduction(
-      attendance.expectedDays,
+      expectedDays,
       attendance.actualDays,
       dailyRate
     );

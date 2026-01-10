@@ -109,6 +109,7 @@ export type {
   // Operation parameter types
   EmployeeOperationParams,  // v2.3.0: Base interface for all employee operations
   HireEmployeeParams,
+  GetEmployeeParams,  // v2.3.0: Includes organizationId, employeeIdMode
   UpdateEmploymentParams,
   TerminateEmployeeParams,
   ReHireEmployeeParams,

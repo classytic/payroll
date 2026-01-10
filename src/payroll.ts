@@ -2098,45 +2098,38 @@ export class Payroll<
     let attendanceData = input.attendance;
 
     // Handle DB-based attendance lookup (if not provided and AttendanceModel exists)
+    // Priority: 1. Explicit attendance (passed in) → 2. Auto-fetch from DB → 3. Full attendance (no deduction)
     if (!options.skipAttendance && this.config.payroll.attendanceIntegration && !attendanceData && this.models.AttendanceModel) {
-      // This is the ONLY non-pure part - fetch attendance from DB
-      const dbAttendance = await this.calculateAttendanceDeduction(
-        employee._id,
-        employee.organizationId,
-        period,
-        0, // We'll recalculate daily rate in the pure calculator
-        0, // We'll calculate expected days in the pure calculator
-        session
-      );
+      try {
+        // Auto-fetch attendance from database
+        let query = this.models.AttendanceModel.findOne({
+          organizationId: employee.organizationId,
+          targetId: employee._id,
+          targetModel: 'Employee',
+          year: period.year,
+          month: period.month,
+        });
+        if (session) query = query.session(session);
 
-      // Convert DB result to attendance data format
-      if (dbAttendance > 0) {
-        // We need to get actual working days from the attendance model
-        // For now, we'll keep the old behavior and let the pure calculator handle it
-        try {
-          let query = this.models.AttendanceModel.findOne({
-            tenantId: employee.organizationId,
-            targetId: employee._id,
-            targetModel: 'Employee',
-            year: period.year,
-            month: period.month,
-          });
-          if (session) query = query.session(session);
-
-          const attendance = await query;
-          if (attendance) {
-            const workedDays = (attendance as { totalWorkDays?: number }).totalWorkDays || 0;
-            attendanceData = {
-              expectedDays: 0, // Will be calculated by the pure calculator
-              actualDays: workedDays,
-            };
-          }
-        } catch (error) {
-          getLogger().warn('Failed to fetch attendance data', {
+        const attendance = await query;
+        if (attendance) {
+          const workedDays = (attendance as { totalWorkDays?: number }).totalWorkDays || 0;
+          attendanceData = {
+            // Don't set expectedDays - let calculator derive from workSchedule/proRating
+            actualDays: workedDays,
+          };
+          getLogger().debug('Auto-fetched attendance from DB', {
             employeeId: employee._id.toString(),
-            error: (error as Error).message,
+            workedDays,
+            month: period.month,
+            year: period.year,
           });
         }
+      } catch (error) {
+        getLogger().warn('Failed to fetch attendance data', {
+          employeeId: employee._id.toString(),
+          error: (error as Error).message,
+        });
       }
     }
 
@@ -2178,7 +2171,7 @@ export class Payroll<
       if (!this.models.AttendanceModel) return 0;
 
       let query = this.models.AttendanceModel.findOne({
-        tenantId: organizationId,
+        organizationId: organizationId,
         targetId: employeeId,
         targetModel: 'Employee',
         year: period.year,

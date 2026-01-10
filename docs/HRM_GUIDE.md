@@ -149,6 +149,49 @@ export const payroll = createPayrollInstance()
   .build();
 ```
 
+## 🆔 Dual Identity Support (v2.3.0+)
+
+The payroll package supports looking up employees by either:
+- **MongoDB ObjectId** (`_id` field)
+- **Business String ID** (`employeeId` field like "EMP-001")
+
+### When to Use `employeeIdMode`
+
+If your business employeeId is exactly 24 hexadecimal characters (like `507f1f77bcf86cd799439011`), it looks like a MongoDB ObjectId and will be treated as `_id` by default. Use `employeeIdMode` to disambiguate:
+
+```typescript
+// Process salary using business ID (not ObjectId)
+await payroll.processSalary({
+  employeeId: "507f1f77bcf86cd799439011",  // Looks like ObjectId!
+  employeeIdMode: 'businessId',             // Force treat as string
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+
+// Or explicitly use ObjectId
+await payroll.processSalary({
+  employeeId: employee._id,
+  employeeIdMode: 'objectId',  // Force treat as _id
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+
+// Auto mode (default) - detects automatically
+await payroll.processSalary({
+  employeeId: "EMP-001",      // String → uses employeeId field
+  employeeIdMode: 'auto',     // Default
+  organizationId: org._id,
+  month: 3,
+  year: 2024,
+});
+```
+
+**Supported methods**: `processSalary`, `getEmployee`, `updateEmployment`, `terminate`, `reHire`, `updateSalary`, `addAllowance`, `removeAllowance`, `addDeduction`, `removeDeduction`, `updateBankDetails`, `payrollHistory`
+
+---
+
 ## 💼 Complete HRM Service
 
 ```typescript

@@ -326,6 +326,251 @@ describe('Tenant Mode Configuration', () => {
     });
   });
 
+  describe('getEmployee Multi-Tenant Security', () => {
+    it('should require organizationId for getEmployee in multi-tenant mode', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      // Create employee first
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Should fail without organizationId
+      await expect(
+        payroll.getEmployee({
+          employeeId: employee._id,
+          // organizationId missing!
+        } as any)
+      ).rejects.toThrow('getEmployee requires organizationId');
+    });
+
+    it('should succeed with organizationId for getEmployee in multi-tenant mode', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Should succeed with organizationId
+      const found = await payroll.getEmployee({
+        employeeId: employee._id,
+        organizationId: org1,
+        populateUser: false, // Skip User model population
+      });
+
+      expect(found._id.toString()).toBe(employee._id.toString());
+    });
+
+    it('should prevent cross-tenant access via getEmployee', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      // Create employee in org1
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Try to access with wrong org - should fail
+      await expect(
+        payroll.getEmployee({
+          employeeId: employee._id,
+          organizationId: org2, // Wrong org!
+          populateUser: false,
+        })
+      ).rejects.toThrow(); // EmployeeNotFoundError
+    });
+  });
+
+  describe('getEmployee Single-Tenant Mode', () => {
+    it('should work without organizationId in single-tenant mode', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .forSingleTenant({
+          organizationId: org1,
+          autoInject: true,
+        })
+        .build();
+
+      const employee = await payroll.hire({
+        userId: user1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Should succeed without organizationId (auto-injected)
+      const found = await payroll.getEmployee({
+        employeeId: employee._id,
+        populateUser: false, // Skip User model population
+        // organizationId NOT provided - auto-injected!
+      });
+
+      expect(found._id.toString()).toBe(employee._id.toString());
+      expect(found.organizationId.toString()).toBe(org1.toString());
+    });
+  });
+
+  describe('getEmployee employeeIdMode', () => {
+    it('should support employeeIdMode: objectId', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Force lookup by ObjectId
+      const found = await payroll.getEmployee({
+        employeeId: employee._id,
+        employeeIdMode: 'objectId',
+        organizationId: org1,
+        populateUser: false,
+      });
+
+      expect(found._id.toString()).toBe(employee._id.toString());
+    });
+
+    it('should support employeeIdMode: businessId', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Lookup by business employeeId string
+      const found = await payroll.getEmployee({
+        employeeId: 'EMP-001',
+        employeeIdMode: 'businessId',
+        organizationId: org1,
+        populateUser: false,
+      });
+
+      expect(found._id.toString()).toBe(employee._id.toString());
+      expect(found.employeeId).toBe('EMP-001');
+    });
+
+    it('should handle 24-hex collision with employeeIdMode: businessId', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      // Create employee with 24-hex business ID (looks like ObjectId!)
+      const hexEmployeeId = '507f1f77bcf86cd799439011';
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: hexEmployeeId, // Looks like ObjectId!
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Without employeeIdMode, auto-detect would treat as ObjectId (wrong!)
+      // With employeeIdMode: 'businessId', force treat as string
+      const found = await payroll.getEmployee({
+        employeeId: hexEmployeeId,
+        employeeIdMode: 'businessId', // Force treat as business ID
+        organizationId: org1,
+        populateUser: false,
+      });
+
+      expect(found._id.toString()).toBe(employee._id.toString());
+      expect(found.employeeId).toBe(hexEmployeeId);
+    });
+
+    it('should default to auto mode for employeeIdMode', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel: Employee, PayrollRecordModel: PayrollRecord, TransactionModel: Transaction })
+        .build();
+
+      const employee = await payroll.hire({
+        userId: user1,
+        organizationId: org1,
+        employment: {
+          employeeId: 'EMP-001',
+          position: 'Engineer',
+          department: 'it',
+          type: 'full_time',
+        },
+        compensation: { baseAmount: 100000, currency: 'USD' },
+      });
+
+      // Auto mode: String 'EMP-001' -> uses employeeId field
+      const foundByString = await payroll.getEmployee({
+        employeeId: 'EMP-001', // String -> auto-detects as business ID
+        organizationId: org1,
+        populateUser: false,
+        // employeeIdMode defaults to 'auto'
+      });
+
+      expect(foundByString._id.toString()).toBe(employee._id.toString());
+
+      // Auto mode: ObjectId -> uses _id field
+      const foundByObjectId = await payroll.getEmployee({
+        employeeId: employee._id, // ObjectId -> auto-detects as _id
+        organizationId: org1,
+        populateUser: false,
+      });
+
+      expect(foundByObjectId._id.toString()).toBe(employee._id.toString());
+    });
+  });
+
   describe('Flexible Organization Resolution', () => {
     it('should support different organizationId formats', async () => {
       const payroll = createPayrollInstance()

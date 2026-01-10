@@ -11,7 +11,7 @@ import type { ObjectIdLike } from './types.js';
 
 /**
  * ClockIn attendance shape (from @classytic/clockin)
- * 
+ *
  * ClockIn stores one document per employee per month with:
  * - totalWorkDays: Total days worked
  * - fullDaysCount: Full work days
@@ -19,7 +19,7 @@ import type { ObjectIdLike } from './types.js';
  * - paidLeaveDaysCount: Paid leave
  */
 interface ClockInAttendance {
-  tenantId: unknown;
+  organizationId: unknown;
   targetId: unknown;
   targetModel: string;
   year: number;
@@ -62,7 +62,7 @@ export async function getAttendance(
   }
 ): Promise<(AttendanceInput & { absentDays: number; overtimeDays: number }) | null> {
   const record = await AttendanceModel.findOne({
-    tenantId: params.organizationId,
+    organizationId: params.organizationId,
     targetId: params.employeeId,
     targetModel: 'Employee',
     year: params.year,
@@ -114,7 +114,7 @@ export async function batchGetAttendance(
   }
 ): Promise<Map<string, AttendanceInput>> {
   const records = await AttendanceModel.find({
-    tenantId: params.organizationId,
+    organizationId: params.organizationId,
     targetId: { $in: params.employeeIds },
     targetModel: 'Employee',
     year: params.year,

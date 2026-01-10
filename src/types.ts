@@ -810,6 +810,14 @@ export interface UpdateBankDetailsParams extends EmployeeOperationParams {
   bankDetails: BankDetails;
 }
 
+/** Get employee parameters */
+export interface GetEmployeeParams extends EmployeeOperationParams {
+  /** Whether to populate user reference */
+  populateUser?: boolean;
+  /** MongoDB session for transactions */
+  session?: import('mongoose').ClientSession;
+}
+
 /** Process salary parameters */
 export interface ProcessSalaryParams extends EmployeeOperationParams {
   /** Month (1-12) */
@@ -1061,11 +1069,7 @@ export interface PayrollInstance<
   // ========================================
 
   hire(params: HireEmployeeParams): Promise<TEmployee>;
-  getEmployee(params: {
-    employeeId: ObjectIdLike;
-    populateUser?: boolean;
-    session?: ClientSession;
-  }): Promise<TEmployee>;
+  getEmployee(params: GetEmployeeParams): Promise<TEmployee>;
   updateEmployment(params: UpdateEmploymentParams): Promise<TEmployee>;
   terminate(params: TerminateEmployeeParams): Promise<TEmployee>;
   reHire(params: ReHireEmployeeParams): Promise<TEmployee>;

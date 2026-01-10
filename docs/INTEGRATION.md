@@ -15,7 +15,7 @@ If you want to enable attendance-based payroll calculations, your `AttendanceMod
 ```typescript
 interface AttendanceRecord {
   // Multi-tenancy
-  tenantId: ObjectId;          // Organization ID (required)
+  organizationId: ObjectId;    // Organization ID (required)
 
   // Polymorphic target reference
   targetModel: string;         // Model name, must include 'Employee'
@@ -73,12 +73,86 @@ const payroll = createPayrollInstance()
 
 ## How It Works
 
-### Automatic Payroll Deductions
+### Attendance Resolution Priority
 
-When `AttendanceModel` is provided and `attendanceIntegration` is enabled:
+When processing payroll, attendance is resolved in this order:
 
-1. **Fetches attendance record** for the employee's pay period
-2. **Reads `totalWorkDays`** from the attendance document
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  processSalary({ employeeId, month, year, attendance? })        │
+│                                                                 │
+│  1. If attendance is passed → use it directly (PRIMARY)         │
+│  2. If not passed + AttendanceModel exists → auto-fetch (FALLBACK) │
+│  3. If neither → assume full attendance (no deduction)          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Approach | When to Use |
+|----------|-------------|
+| Explicit (primary) | Production apps with custom attendance logic, multiple attendance sources, complex rules |
+| Auto-fetch (fallback) | Quick prototyping, simple setups where ClockIn schema matches exactly |
+
+### Recommended: Explicit Attendance (Full Control)
+
+Use the `getAttendance()` helper for production apps:
+
+```typescript
+import { getAttendance } from '@classytic/payroll';
+
+// Fetch attendance explicitly
+const attendance = await getAttendance(AttendanceModel, {
+  organizationId,
+  employeeId,
+  month: 3,
+  year: 2024,
+  expectedDays: 21, // You control this!
+});
+
+// Pass to processSalary
+await payroll.processSalary({
+  employeeId,
+  organizationId,
+  month: 3,
+  year: 2024,
+  attendance, // Explicit - full control
+});
+```
+
+### Auto-Fetch (Simple Setup)
+
+For simple setups, just enable `attendanceIntegration`:
+
+```typescript
+const payroll = createPayrollInstance()
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+    AttendanceModel, // ✅ Provide AttendanceModel
+  })
+  .withConfig({
+    payroll: {
+      attendanceIntegration: true, // ✅ Enable auto-fetch
+    },
+  })
+  .build();
+
+// Auto-fetches attendance from DB
+await payroll.processSalary({
+  employeeId,
+  organizationId,
+  month: 3,
+  year: 2024,
+  // attendance NOT passed - auto-fetched from AttendanceModel!
+});
+```
+
+### How Deductions Are Calculated
+
+When attendance is available:
+
+1. **Reads `totalWorkDays`** from the attendance document
+2. **Derives expected days** from employee's work schedule
 3. **Calculates absent days**: `expectedWorkingDays - totalWorkDays`
 4. **Applies deduction**: `absentDays × dailyRate`
 
@@ -112,7 +186,7 @@ If you're using your own attendance system, ensure your model includes:
 import mongoose from 'mongoose';
 
 const customAttendanceSchema = new mongoose.Schema({
-  tenantId: {
+  organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
   },
@@ -152,7 +226,7 @@ const customAttendanceSchema = new mongoose.Schema({
 
 // IMPORTANT: Unique index for efficient queries
 customAttendanceSchema.index(
-  { tenantId: 1, targetModel: 1, targetId: 1, year: 1, month: 1 },
+  { organizationId: 1, targetModel: 1, targetId: 1, year: 1, month: 1 },
   { unique: true }
 );
 
@@ -225,7 +299,7 @@ The payroll library queries attendance like this:
 
 ```typescript
 const attendance = await AttendanceModel.findOne({
-  tenantId: organizationId,
+  organizationId: organizationId,
   targetId: employeeId,
   targetModel: 'Employee',
   year: 2025,
@@ -243,13 +317,13 @@ const workedDays = attendance?.totalWorkDays || 0;
 
 Before enabling attendance integration, verify:
 
-- [ ] Model has `tenantId` field (ObjectId)
+- [ ] Model has `organizationId` field (ObjectId)
 - [ ] Model has `targetModel` field (String, includes 'Employee')
 - [ ] Model has `targetId` field (ObjectId)
 - [ ] Model has `year` field (Number)
 - [ ] Model has `month` field (Number, 1-12)
 - [ ] Model has `totalWorkDays` field (Number, decimal)
-- [ ] Compound index on `(tenantId, targetModel, targetId, year, month)`
+- [ ] Compound index on `(organizationId, targetModel, targetId, year, month)`
 - [ ] `totalWorkDays` is calculated correctly before payroll runs
 
 ---
