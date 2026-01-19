@@ -98,6 +98,14 @@ export {
 } from './plugin.js';
 
 // ============================================================================
+// Repository Plugins (Mongokit Integration)
+// ============================================================================
+
+export {
+  multiTenantPlugin,
+} from './repository-plugins.js';
+
+// ============================================================================
 // Container
 // ============================================================================
 
@@ -136,3 +144,45 @@ export {
   calculateSalaryBreakdown,
   getPayPeriod,
 } from './config.js';
+
+// ============================================================================
+// State Machines
+// ============================================================================
+
+export {
+  // State machine utility
+  StateMachine,
+  createStateMachine,
+  type StateMachineConfig,
+  type StateTransition,
+  type TransitionResult,
+  // Payroll status machine
+  PayrollStatusMachine,
+  type PayrollStatusState,
+  // Tax status machine
+  TaxStatusMachine,
+  type TaxStatusState,
+  // Leave request status machine
+  LeaveRequestStatusMachine,
+  type LeaveRequestStatusState,
+  // Employee status machine
+  EmployeeStatusMachine,
+  type EmployeeStatusState,
+} from './payroll-states.js';
+
+// ============================================================================
+// Timeline Audit Integration (@classytic/mongoose-timeline-audit)
+// ============================================================================
+
+export {
+  // Event constants for timeline tracking
+  PAYROLL_EVENTS,
+  type PayrollTimelineEvent,
+  // Recommended configurations for each model
+  EMPLOYEE_TIMELINE_CONFIG,
+  PAYROLL_RECORD_TIMELINE_CONFIG,
+  LEAVE_REQUEST_TIMELINE_CONFIG,
+  // Helper functions
+  buildTimelineMetadata,
+  buildRequestContext,
+} from './timeline-audit.js';

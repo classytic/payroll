@@ -5,7 +5,7 @@
  * Can be spread into your own schemas
  */
 
-import mongoose, { Schema, type SchemaDefinition } from 'mongoose';
+import { Schema, type SchemaDefinition, type Types } from 'mongoose';
 import {
   EMPLOYMENT_TYPE_VALUES,
   EMPLOYEE_STATUS_VALUES,
@@ -19,6 +19,56 @@ import {
 } from '../enums.js';
 import { HRM_CONFIG } from '../config.js';
 import { periodSchema } from './common.js';
+
+// ============================================================================
+// Schema Options (Multi-Tenant / Multi-Branch Flexibility)
+// ============================================================================
+
+/**
+ * Options for configuring schema references.
+ *
+ * Use these to customize what collection `organizationId` references.
+ * This supports multi-branch, multi-tenant, or any other hierarchy structure.
+ *
+ * @example
+ * ```typescript
+ * // Multi-branch setup (one company, multiple branches)
+ * const employeeSchema = createEmployeeSchema({}, {
+ *   organizationRef: 'Branch',
+ * });
+ *
+ * // Multi-tenant SaaS
+ * const employeeSchema = createEmployeeSchema({}, {
+ *   organizationRef: 'Tenant',
+ * });
+ *
+ * // Enterprise with workspaces
+ * const employeeSchema = createEmployeeSchema({}, {
+ *   organizationRef: 'Workspace',
+ * });
+ * ```
+ */
+export interface PayrollSchemaOptions {
+  /**
+   * The collection name that `organizationId` references.
+   *
+   * This is used for Mongoose's `populate()` feature. The multi-tenant
+   * plugin filters by the ObjectId value regardless of what collection
+   * it references.
+   *
+   * @default 'Organization'
+   *
+   * @example 'Branch' | 'Company' | 'Tenant' | 'Workspace' | 'Team'
+   */
+  organizationRef?: string;
+
+  /**
+   * The collection name that `userId` references.
+   *
+   * @default 'User'
+   */
+  userRef?: string;
+}
 
 // ============================================================================
 // Sub-Schemas
@@ -80,7 +130,7 @@ export const compensationSchema = new Schema(
       enum: PAYMENT_FREQUENCY_VALUES,
       default: 'monthly',
     },
-    currency: { type: String, default: 'BDT' },
+    currency: { type: String }, // No default - use config or USD fallback in application logic
     allowances: [allowanceSchema],
     deductions: [deductionSchema],
     grossSalary: { type: Number, default: 0 },
@@ -155,54 +205,59 @@ export const payrollStatsSchema = new Schema(
 // ============================================================================
 
 /**
- * Employment fields to spread into your Employee schema
- * 
- * @example
- * const employeeSchema = new Schema({
- *   ...employmentFields,
- *   // Your custom fields
- *   certifications: [{ name: String, issuedDate: Date }],
- * });
+ * Employment fields to spread into your Employee schema.
+ * Use `createEmploymentFields()` for configurable references.
  */
-export const employmentFields: SchemaDefinition = {
-  userId: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: false,  // Allow guest employees (no user account)
-  },
-  email: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    required: false,  // For guest employees without user account
-  },
-  organizationId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Organization',
-    required: true,
-  },
-  employeeId: { type: String, required: true },
-  employmentType: {
-    type: String,
-    enum: EMPLOYMENT_TYPE_VALUES,
-    default: 'full_time',
-  },
-  status: {
-    type: String,
-    enum: EMPLOYEE_STATUS_VALUES,
-    default: 'active',
-  },
-  department: { type: String, enum: DEPARTMENT_VALUES },
-  position: { type: String, required: true },
-  hireDate: { type: Date, required: true },
-  terminationDate: { type: Date },
-  probationEndDate: { type: Date },
-  employmentHistory: [employmentHistorySchema],
-  compensation: { type: compensationSchema, required: true },
-  workSchedule: workScheduleSchema,
-  bankDetails: bankDetailsSchema,
-  payrollStats: { type: payrollStatsSchema, default: () => ({}) },
-};
+/**
+ * Create employment fields with configurable references.
+ *
+ * @param options - Schema options for configuring references
+ * @returns SchemaDefinition for employment fields
+ */
+export function createEmploymentFields(options: PayrollSchemaOptions = {}): SchemaDefinition {
+  const { organizationRef = 'Organization', userRef = 'User' } = options;
+
+  return {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: userRef,
+      required: false,  // Allow guest employees (no user account)
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      required: false,  // For guest employees without user account
+    },
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: organizationRef,  // Configurable: 'Branch', 'Company', 'Tenant', etc.
+      required: true,
+    },
+    employeeId: { type: String, required: true },
+    employmentType: {
+      type: String,
+      enum: EMPLOYMENT_TYPE_VALUES,
+      default: 'full_time',
+    },
+    status: {
+      type: String,
+      enum: EMPLOYEE_STATUS_VALUES,
+      default: 'active',
+    },
+    department: { type: String, enum: DEPARTMENT_VALUES },
+    position: { type: String, required: true },
+    hireDate: { type: Date, required: true },
+    terminationDate: { type: Date },
+    probationEndDate: { type: Date },
+    employmentHistory: [employmentHistorySchema],
+    compensation: { type: compensationSchema, required: true },
+    workSchedule: workScheduleSchema,
+    bankDetails: bankDetailsSchema,
+    payrollStats: { type: payrollStatsSchema, default: () => ({}) },
+  };
+}
+
 
 // ============================================================================
 // Payroll Record Sub-Schemas
@@ -249,56 +304,61 @@ export const payrollBreakdownSchema = new Schema(
 export { periodSchema };
 
 /**
- * Payroll record fields to spread into PayrollRecord schema
+ * Create payroll record fields with configurable references.
+ *
+ * @param options - Schema options for configuring references
+ * @returns SchemaDefinition for payroll record fields
  */
-export const payrollRecordFields: SchemaDefinition = {
-  organizationId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Organization',
-    required: true,
-  },
-  employeeId: {
-    type: Schema.Types.ObjectId,
-    required: true,
-  },
-  userId: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: false,  // Optional for guest employees
-  },
-  period: { type: periodSchema, required: true },
-  breakdown: { type: payrollBreakdownSchema, required: true },
-  transactionId: { type: Schema.Types.ObjectId, ref: 'Transaction' },
-  status: {
-    type: String,
-    enum: PAYROLL_STATUS_VALUES,
-    default: 'pending',
-  },
-  processedAt: { type: Date },
-  paidAt: { type: Date },
-  paymentMethod: {
-    type: String,
-    enum: PAYMENT_METHOD_VALUES,
-  },
-  processedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  notes: { type: String },
-  payslipUrl: { type: String },
-  metadata: {
-    type: Schema.Types.Mixed,
-    default: {},
-  },
-  exported: { type: Boolean, default: false },
-  exportedAt: { type: Date },
-  corrections: [
-    {
-      previousAmount: Number,
-      newAmount: Number,
-      reason: String,
-      correctedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-      correctedAt: { type: Date, default: Date.now },
+export function createPayrollRecordFields(options: PayrollSchemaOptions = {}): SchemaDefinition {
+  const { organizationRef = 'Organization', userRef = 'User' } = options;
+
+  return {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: organizationRef,  // Configurable: 'Branch', 'Company', 'Tenant', etc.
+      required: true,
     },
-  ],
-};
+    employeeId: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: userRef,
+      required: false,  // Optional for guest employees
+    },
+    period: { type: periodSchema, required: true },
+    breakdown: { type: payrollBreakdownSchema, required: true },
+    transactionId: { type: Schema.Types.ObjectId },
+    status: {
+      type: String,
+      enum: PAYROLL_STATUS_VALUES,
+      default: 'pending',
+    },
+    paidAt: { type: Date },
+    processedAt: { type: Date },
+    paymentMethod: { type: String, enum: PAYMENT_METHOD_VALUES },
+    metadata: { type: Schema.Types.Mixed },
+    processedBy: { type: Schema.Types.ObjectId, ref: userRef },
+    notes: { type: String },
+    payslipUrl: { type: String },
+    exported: { type: Boolean, default: false },
+    exportedAt: { type: Date },
+    // Void / Reversal fields (v2.4.0+)
+    isVoided: { type: Boolean, default: false },
+    voidedAt: { type: Date },
+    voidedBy: { type: Schema.Types.ObjectId, ref: userRef },
+    voidReason: { type: String },
+    reversedAt: { type: Date },
+    reversedBy: { type: Schema.Types.ObjectId, ref: userRef },
+    reversalReason: { type: String },
+    reversalTransactionId: { type: Schema.Types.ObjectId },
+    originalPayrollId: { type: Schema.Types.ObjectId },
+    // TTL expiration (per-document)
+    expireAt: { type: Date },
+  };
+}
+
 
 // ============================================================================
 // Index Definitions
@@ -379,14 +439,37 @@ export function applyPayrollRecordIndexes(schema: Schema): void {
 // ============================================================================
 
 /**
- * Create a complete Employee schema with all HRM fields
+ * Create a complete Employee schema with all HRM fields.
+ *
+ * @param additionalFields - Extra fields to add to the schema
+ * @param options - Schema options (organizationRef, userRef)
+ * @returns Mongoose Schema for Employee
+ *
+ * @example
+ * ```typescript
+ * // Default (references 'Organization')
+ * const employeeSchema = createEmployeeSchema();
+ *
+ * // Multi-branch setup
+ * const employeeSchema = createEmployeeSchema({}, {
+ *   organizationRef: 'Branch',
+ * });
+ *
+ * // With additional fields
+ * const employeeSchema = createEmployeeSchema({
+ *   customField: { type: String },
+ * }, {
+ *   organizationRef: 'Company',
+ * });
+ * ```
  */
 export function createEmployeeSchema(
-  additionalFields: SchemaDefinition = {}
+  additionalFields: SchemaDefinition = {},
+  options: PayrollSchemaOptions = {}
 ): Schema {
   const schema = new Schema(
     {
-      ...employmentFields,
+      ...createEmploymentFields(options),
       ...additionalFields,
     },
     { timestamps: true }
@@ -402,14 +485,27 @@ export function createEmployeeSchema(
 }
 
 /**
- * Create a complete PayrollRecord schema
+ * Create a complete PayrollRecord schema.
+ *
+ * @param additionalFields - Extra fields to add to the schema
+ * @param options - Schema options (organizationRef, userRef)
+ * @returns Mongoose Schema for PayrollRecord
+ *
+ * @example
+ * ```typescript
+ * // Multi-branch setup
+ * const payrollRecordSchema = createPayrollRecordSchema({}, {
+ *   organizationRef: 'Branch',
+ * });
+ * ```
  */
 export function createPayrollRecordSchema(
-  additionalFields: SchemaDefinition = {}
+  additionalFields: SchemaDefinition = {},
+  options: PayrollSchemaOptions = {}
 ): Schema {
   const schema = new Schema(
     {
-      ...payrollRecordFields,
+      ...createPayrollRecordFields(options),
       ...additionalFields,
     },
     { timestamps: true }
@@ -438,7 +534,7 @@ export function createPayrollRecordSchema(
 
   // Method: markAsPaid
   schema.methods.markAsPaid = function (
-    transactionId: mongoose.Types.ObjectId,
+    transactionId: Types.ObjectId,
     paidAt = new Date()
   ) {
     this.status = 'paid';
@@ -468,11 +564,12 @@ export function createPayrollRecordSchema(
 export {
   leaveBalanceSchema,
   leaveBalanceFields,
-  leaveRequestFields,
+  leaveRequestSchema,
   leaveRequestIndexes,
   leaveRequestTTLIndex,
   applyLeaveRequestIndexes,
-  createLeaveRequestSchema,
+  getLeaveRequestFields,
+  getLeaveRequestModel,
 } from './leave.js';
 
 // ============================================================================
@@ -480,10 +577,11 @@ export {
 // ============================================================================
 
 export {
-  taxWithholdingFields,
+  taxWithholdingSchema,
   taxWithholdingIndexes,
   applyTaxWithholdingIndexes,
-  createTaxWithholdingSchema,
+  getTaxWithholdingFields,
+  getTaxWithholdingModel,
 } from './tax-withholding.js';
 
 // ============================================================================
@@ -501,9 +599,9 @@ export default {
   payrollStatsSchema,
   payrollBreakdownSchema,
   periodSchema,
-  // Fields
-  employmentFields,
-  payrollRecordFields,
+  // Field creators (configurable references)
+  createEmploymentFields,
+  createPayrollRecordFields,
   // Indexes
   employeeIndexes,
   payrollRecordIndexes,

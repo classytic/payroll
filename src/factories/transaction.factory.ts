@@ -26,7 +26,7 @@ export interface CreatePayrollTransactionInput {
     employeeId: string;
     email?: string;
     compensation: {
-      currency: string;
+      currency?: string;
     };
   };
   payrollRecord: {
@@ -42,6 +42,7 @@ export interface CreatePayrollTransactionInput {
   processedBy?: ObjectIdLike;
   idempotencyKey?: string;
   jurisdiction?: string; // Optional: 'US', 'BD', 'UK', etc. (defaults based on org)
+  defaultCurrency?: string; // Config default currency (fallback before USD)
 }
 
 /**
@@ -72,7 +73,7 @@ export interface CreateTaxPaymentTransactionInput {
  * @pure This function has no side effects
  */
 export function createPayrollTransaction(input: CreatePayrollTransactionInput): ITransactionCreateInput {
-  const { organizationId, employee, payrollRecord, breakdown, period, paymentDate, paymentMethod = 'bank_transfer', processedBy, idempotencyKey, jurisdiction } = input;
+  const { organizationId, employee, payrollRecord, breakdown, period, paymentDate, paymentMethod = 'bank_transfer', processedBy, idempotencyKey, jurisdiction, defaultCurrency } = input;
 
   // Extract userId if present (optional for guest employees)
   const userIdValue = employee.userId
@@ -86,8 +87,8 @@ export function createPayrollTransaction(input: CreatePayrollTransactionInput): 
     ? (employee.userId as { name?: string })?.name
     : undefined;
 
-  // Use employee's currency (flexible, not hardcoded)
-  const currency = employee.compensation.currency || 'USD';
+  // Use employee's currency with proper fallback chain
+  const currency = employee.compensation.currency || defaultCurrency || 'USD';
 
   // Align with @classytic/shared-types ITransactionCreateInput
   return {

@@ -215,9 +215,10 @@ export class EmployeeQueryBuilder extends QueryBuilder {
 
   /**
    * Filter user-linked employees (has userId)
+   * Uses $exists: true and $ne: null to exclude both missing fields and null values
    */
   userLinkedEmployees(): this {
-    return this.where('userId', { $ne: null } as unknown as mongoose.Types.ObjectId);
+    return this.where('userId', { $exists: true, $ne: null } as unknown as mongoose.Types.ObjectId);
   }
 
   /**

@@ -170,6 +170,15 @@ export class NotEligibleError extends PayrollError {
   }
 }
 
+/**
+ * Security error (unauthorized access, cross-organization access, etc.)
+ */
+export class SecurityError extends PayrollError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, 'SECURITY_ERROR', 403, context ?? {});
+  }
+}
+
 // ============================================================================
 // Error Factory
 // ============================================================================
@@ -192,6 +201,7 @@ export function createError(
     EMPLOYEE_TERMINATED: 400,
     ALREADY_PROCESSED: 409,
     NOT_ELIGIBLE: 400,
+    SECURITY_ERROR: 403,
   };
 
   return new PayrollError(message, code, statusMap[code] || 500, context ?? {});

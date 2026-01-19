@@ -351,7 +351,7 @@ describe('Tenant Mode Configuration', () => {
           employeeId: employee._id,
           // organizationId missing!
         } as any)
-      ).rejects.toThrow('getEmployee requires organizationId');
+      ).rejects.toThrow('organizationId is required in multi-tenant mode for security');
     });
 
     it('should succeed with organizationId for getEmployee in multi-tenant mode', async () => {

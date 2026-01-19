@@ -176,7 +176,8 @@ export const PAYROLL_STATUS = {
   PROCESSING: 'processing',
   PAID: 'paid',
   FAILED: 'failed',
-  CANCELLED: 'cancelled',
+  VOIDED: 'voided',
+  REVERSED: 'reversed',
 } as const satisfies Record<string, PayrollStatus>;
 
 export const PAYROLL_STATUS_VALUES = Object.values(PAYROLL_STATUS);
@@ -191,6 +192,23 @@ export function isCompletedPayrollStatus(status: PayrollStatus): boolean {
 
 export function isPendingPayrollStatus(status: PayrollStatus): boolean {
   return status === PAYROLL_STATUS.PENDING || status === PAYROLL_STATUS.PROCESSING;
+}
+
+/** Check if payroll can be voided (not yet paid) */
+export function isVoidablePayrollStatus(status: PayrollStatus): boolean {
+  return status === PAYROLL_STATUS.PENDING ||
+         status === PAYROLL_STATUS.PROCESSING ||
+         status === PAYROLL_STATUS.FAILED;
+}
+
+/** Check if payroll requires reversal (already paid) */
+export function requiresReversalPayrollStatus(status: PayrollStatus): boolean {
+  return status === PAYROLL_STATUS.PAID;
+}
+
+/** Check if payroll is in a terminal void/reverse state */
+export function isVoidedOrReversedStatus(status: PayrollStatus): boolean {
+  return status === PAYROLL_STATUS.VOIDED || status === PAYROLL_STATUS.REVERSED;
 }
 
 // ============================================================================
@@ -312,6 +330,7 @@ export const TAX_STATUS = {
   PENDING: 'pending',
   SUBMITTED: 'submitted',
   PAID: 'paid',
+  CANCELLED: 'cancelled',
 } as const satisfies Record<string, import('./types.js').TaxStatus>;
 
 export const TAX_STATUS_VALUES = Object.values(TAX_STATUS);
@@ -326,6 +345,10 @@ export function isPendingTaxStatus(status: import('./types.js').TaxStatus): bool
 
 export function isPaidTaxStatus(status: import('./types.js').TaxStatus): boolean {
   return status === TAX_STATUS.PAID;
+}
+
+export function isCancelledTaxStatus(status: import('./types.js').TaxStatus): boolean {
+  return status === TAX_STATUS.CANCELLED;
 }
 
 // ============================================================================

@@ -24,9 +24,9 @@ import {
   DEFAULT_LEAVE_ALLOCATIONS,
   DEFAULT_CARRY_OVER,
   // Schemas
-  employmentFields,
+  createEmploymentFields,
   leaveBalanceFields,
-  createLeaveRequestSchema,
+  leaveRequestSchema,
   applyLeaveRequestIndexes,
   // Plugin
   employeePlugin,
@@ -434,7 +434,7 @@ describe('Leave Enums', () => {
 describe('Employee with Leave', () => {
   // Create employee schema with leave support
   const employeeSchema = new Schema({
-    ...employmentFields,
+    ...createEmploymentFields(),
     ...leaveBalanceFields,
     notes: String,
   }, { timestamps: true });
@@ -858,7 +858,7 @@ describe('LeaveService', () => {
 
   // Create test models
   const employeeSchema = new Schema({
-    ...employmentFields,
+    ...createEmploymentFields(),
     ...leaveBalanceFields,
     organizationId: { type: Schema.Types.ObjectId, required: true },
     userId: { type: Schema.Types.ObjectId, required: true },
@@ -1056,6 +1056,7 @@ describe('LeaveService', () => {
 
     const { hasOverlap, overlappingRequests } = await service.checkOverlap({
       employeeId,
+      organizationId: orgId, // SECURITY: Required in multi-tenant mode
       startDate: new Date('2024-06-05'),
       endDate: new Date('2024-06-10'),
     });
@@ -1103,6 +1104,7 @@ describe('LeaveService', () => {
     });
 
     const result = await service.reviewLeave({
+      organizationId: orgId,
       requestId: request._id,
       reviewerId,
       action: 'approve',
@@ -1156,6 +1158,7 @@ describe('LeaveService', () => {
     });
 
     const result = await service.reviewLeave({
+      organizationId: orgId,
       requestId: request._id,
       reviewerId,
       action: 'reject',
@@ -1207,6 +1210,7 @@ describe('LeaveService', () => {
     });
 
     const result = await service.cancelLeave({
+      organizationId: orgId,
       requestId: request._id,
     });
 

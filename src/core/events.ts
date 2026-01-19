@@ -10,6 +10,7 @@ import type {
   EmployeeDocument,
   PayrollRecordDocument,
   ObjectId,
+  ObjectIdLike,
   OperationContext,
 } from '../types.js';
 
@@ -177,6 +178,19 @@ export interface TaxPaidEventPayload {
   context?: OperationContext;
 }
 
+export interface TaxVoidedEventPayload {
+  withholdings: Array<{
+    id: ObjectId;
+    taxType: string;
+    amount: number;
+  }>;
+  payrollRecordId: ObjectId;
+  organizationId: ObjectId;
+  reason: string;
+  voidedAt: Date;
+  voidedBy?: ObjectIdLike;
+}
+
 // ============================================================================
 // Event Map
 // ============================================================================
@@ -194,6 +208,7 @@ export interface PayrollEventMap {
   'milestone:achieved': MilestoneAchievedEventPayload;
   'tax:withheld': TaxWithheldEventPayload;
   'tax:paid': TaxPaidEventPayload;
+  'tax:voided': TaxVoidedEventPayload;
 }
 
 export type PayrollEventType = keyof PayrollEventMap;

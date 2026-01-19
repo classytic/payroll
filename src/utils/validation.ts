@@ -329,6 +329,45 @@ export function hasRequiredFields(
 }
 
 // ============================================================================
+// Plugin Method Validators
+// ============================================================================
+
+/**
+ * Check if an object has a specific method (typically from a Mongoose plugin)
+ *
+ * @param obj - Object to check
+ * @param method - Method name to verify
+ * @returns true if object has the method as a function
+ *
+ * @example
+ * ```typescript
+ * if (hasPluginMethod(employee, 'canReceiveSalary')) {
+ *   employee.canReceiveSalary();
+ * }
+ * ```
+ */
+export function hasPluginMethod(obj: unknown, method: string): boolean {
+  return typeof obj === 'object' && obj !== null && typeof (obj as Record<string, unknown>)[method] === 'function';
+}
+
+/**
+ * Assert that an object has a specific plugin method, throwing an error if not
+ *
+ * @param obj - Object to check
+ * @param method - Method name to verify
+ * @param context - Context message for error
+ * @throws Error if method is not found
+ */
+export function assertPluginMethod(obj: unknown, method: string, context: string): void {
+  if (!hasPluginMethod(obj, method)) {
+    throw new Error(
+      `Method '${method}' not found on object. Did you forget to apply the appropriate plugin? ` +
+      `Context: ${context}`
+    );
+  }
+}
+
+// ============================================================================
 // Aliases for backwards compatibility
 // ============================================================================
 
@@ -373,5 +412,8 @@ export default {
   composeValidators,
   createValidator,
   hasRequiredFields,
+  // Plugin method validators
+  hasPluginMethod,
+  assertPluginMethod,
 };
 

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose, { Schema, model } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createAttendanceSchema, commonAttendanceFields, applyAttendanceIndexes } from '@classytic/clockin/schemas';
-import { createPayrollInstance, employmentFields, employeePlugin, createPayrollRecordSchema, getAttendance, getHolidays, createHolidaySchema } from '../src/index.js';
+import { createPayrollInstance, createEmploymentFields, employeePlugin, createPayrollRecordSchema, getAttendance, getHolidays, createHolidaySchema } from '../src/index.js';
 import { countWorkingDays } from '../src/core/index.js';
 import { disableLogging } from '../src/utils/logger.js';
 
@@ -50,20 +50,20 @@ beforeEach(async () => {
  *
  * This is the recommended approach:
  * - Start with base schema
- * - Add payroll fields (employmentFields)
+ * - Add payroll fields via createEmploymentFields()
  * - Add clockin fields (commonAttendanceFields)
  * - Apply both plugins
  */
 const employeeSchema = new Schema({
   organizationId: { type: Schema.Types.ObjectId, required: true, index: true },
   userId: { type: Schema.Types.ObjectId, required: true, index: true },
-  
+
   // Payroll: employment, compensation, bank details, etc.
-  ...employmentFields,
-  
+  ...createEmploymentFields(),
+
   // ClockIn: currentSession, attendanceStats, attendanceEnabled
   ...commonAttendanceFields,
-  
+
   // Your app fields
   notes: String,
 }, { timestamps: true });

@@ -17,6 +17,8 @@ import type {
   TaxBracket,
 } from '../types.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions, applyTaxBrackets } from '../utils/calculation.js';
+import { roundMoney, percentageOf, prorateAmount } from '../utils/money.js';
+import { isEffectiveForPeriod } from '../utils/date.js';
 import { countWorkingDays } from '../core/config.js';
 import { calculateProRating, type ProRatingInput, type ProRatingResult } from './prorating.calculator.js';
 import { calculateAttendanceDeduction, calculateDailyRate, type AttendanceDeductionInput } from './attendance.calculator.js';
@@ -183,7 +185,7 @@ export function calculateSalaryBreakdown(input: SalaryCalculationInput): Payroll
   // 2. Apply pro-rating to base salary
   let baseAmount = originalBaseAmount;
   if (proRating.isProRated && config.allowProRating && !options.skipProration) {
-    baseAmount = Math.round(baseAmount * proRating.ratio);
+    baseAmount = prorateAmount(baseAmount, proRating.ratio);
   }
 
   // 3. Filter allowances by effective date
@@ -231,7 +233,7 @@ export function calculateSalaryBreakdown(input: SalaryCalculationInput): Payroll
     // Annualize the taxable amount for tax bracket calculation
     const annualTaxable = taxableAmount * 12;
     const annualTax = applyTaxBrackets(annualTaxable, taxBrackets);
-    taxAmount = Math.round(annualTax / 12); // Monthly tax
+    taxAmount = roundMoney(annualTax / 12); // Monthly tax (banker's rounding)
   }
 
   // Add tax to deductions if applicable
@@ -267,21 +269,6 @@ export function calculateSalaryBreakdown(input: SalaryCalculationInput): Payroll
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Check if allowance/deduction is effective for a given period
- */
-function isEffectiveForPeriod(
-  item: { effectiveFrom?: Date | null; effectiveTo?: Date | null },
-  periodStart: Date,
-  periodEnd: Date
-): boolean {
-  const effectiveFrom = item.effectiveFrom ? new Date(item.effectiveFrom) : new Date(0);
-  const effectiveTo = item.effectiveTo ? new Date(item.effectiveTo) : new Date('2099-12-31');
-
-  // Item is effective if its range overlaps with the period
-  return effectiveFrom <= periodEnd && effectiveTo >= periodStart;
-}
 
 /**
  * Calculate pro-rating for salary calculation
@@ -324,14 +311,14 @@ function processAllowances(
   return allowances.map((a) => {
     // Calculate from original base (percentage) or use fixed amount
     let amount = a.isPercentage && a.value !== undefined
-      ? Math.round((originalBaseAmount * a.value) / 100)
+      ? percentageOf(originalBaseAmount, a.value)
       : a.amount;
 
     const originalAmount = amount;
 
     // Apply pro-rating ONCE if needed
     if (proRating.isProRated && config.allowProRating) {
-      amount = Math.round(amount * proRating.ratio);
+      amount = prorateAmount(amount, proRating.ratio);
     }
 
     return {
@@ -357,14 +344,14 @@ function processDeductions(
   return deductions.map((d) => {
     // Calculate from original base (percentage) or use fixed amount
     let amount = d.isPercentage && d.value !== undefined
-      ? Math.round((originalBaseAmount * d.value) / 100)
+      ? percentageOf(originalBaseAmount, d.value)
       : d.amount;
 
     const originalAmount = amount;
 
     // Apply pro-rating ONCE if needed
     if (proRating.isProRated && config.allowProRating) {
-      amount = Math.round(amount * proRating.ratio);
+      amount = prorateAmount(amount, proRating.ratio);
     }
 
     return {

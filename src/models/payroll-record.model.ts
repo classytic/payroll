@@ -8,6 +8,7 @@ import mongoose, { Schema, Model } from 'mongoose';
 import type { PayrollRecordDocument, PayrollStatus, PaymentMethod, PayrollBreakdown } from '../types.js';
 import { HRM_CONFIG } from '../config.js';
 import { PAYROLL_STATUS } from '../enums.js';
+import { PayrollStatusMachine } from '../core/payroll-states.js';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================
@@ -126,6 +127,95 @@ const payrollRecordSchema = new Schema(
         correctedAt: { type: Date, default: Date.now },
       },
     ],
+
+    // Soft delete / void / reversal fields (v2.4.0+)
+    /** Whether this record has been voided or reversed */
+    isVoided: { type: Boolean, default: false },
+    /** When the record was voided/reversed */
+    voidedAt: { type: Date },
+    /** User who voided/reversed the record */
+    voidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    /** Reason for voiding/reversing */
+    voidReason: { type: String },
+    /** When the record was reversed (for REVERSED status) */
+    reversedAt: { type: Date },
+    /** User who reversed the record */
+    reversedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    /** Reason for reversing the record */
+    reversalReason: { type: String },
+    /** For reversed payrolls: ID of the reversal transaction */
+    reversalTransactionId: { type: Schema.Types.ObjectId, ref: 'Transaction' },
+    /** For reversal records: ID of the original payroll record being reversed */
+    originalPayrollId: { type: Schema.Types.ObjectId, ref: 'PayrollRecord' },
+
+    /**
+     * Payroll run type: regular, off-cycle, supplemental, or retroactive
+     * Default: 'regular'
+     */
+    payrollRunType: {
+      type: String,
+      enum: ['regular', 'off-cycle', 'supplemental', 'retroactive'],
+      default: 'regular',
+    },
+    /**
+     * Retroactive adjustment details (for back-pay or corrections)
+     */
+    retroactiveAdjustment: {
+      type: {
+        originalPeriod: {
+          month: { type: Number, required: true, min: 1, max: 12 },
+          year: { type: Number, required: true },
+        },
+        originalPayrollId: Schema.Types.ObjectId,
+        reason: { type: String, required: true },
+        adjustmentAmount: { type: Number, required: true },
+        approved: Boolean,
+        approvedBy: Schema.Types.ObjectId,
+        approvedAt: Date,
+      },
+      required: false,
+      _id: false,
+    },
+    /**
+     * Employer contributions (costs borne by employer, not deducted from employee)
+     */
+    employerContributions: [
+      {
+        type: {
+          type: String,
+          enum: ['social_security', 'pension', 'unemployment', 'health_insurance', 'other'],
+          required: true,
+        },
+        amount: { type: Number, required: true },
+        description: String,
+        mandatory: Boolean,
+        referenceNumber: String,
+      },
+    ],
+    /**
+     * Optional per-document expiration date for custom TTL.
+     *
+     * If set, this document will be automatically deleted by MongoDB at this date.
+     * Use this for jurisdiction-specific retention requirements.
+     *
+     * @example
+     * // 7-year retention for USA (IRS requirement)
+     * const expireAt = new Date();
+     * expireAt.setFullYear(expireAt.getFullYear() + 7);
+     *
+     * @example
+     * // 10-year retention for Germany
+     * const expireAt = new Date();
+     * expireAt.setFullYear(expireAt.getFullYear() + 10);
+     *
+     * @example
+     * // Never expire (compliance record)
+     * expireAt: undefined // or don't set this field
+     */
+    expireAt: {
+      type: Date,
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -139,7 +229,21 @@ const payrollRecordSchema = new Schema(
 payrollRecordSchema.index({ organizationId: 1, 'period.month': 1, 'period.year': 1 });
 payrollRecordSchema.index({ employeeId: 1, 'period.month': 1, 'period.year': 1 }, { unique: true });
 payrollRecordSchema.index({ organizationId: 1, status: 1 });
-payrollRecordSchema.index({ createdAt: 1 }, { expireAfterSeconds: HRM_CONFIG.dataRetention.payrollRecordsTTL });
+
+/**
+ * TTL Index Configuration
+ *
+ * Standard approach: Use expireAt field with MongoDB TTL index.
+ * The index is configured dynamically via configureRetention() method.
+ *
+ * Documents expire when expireAt date is reached. If expireAt is not set,
+ * it can be auto-calculated based on createdAt + retention period.
+ *
+ * MongoDB deletes expired documents approximately 60 seconds after expiration.
+ *
+ * @see configureRetention() method to set up TTL index
+ */
+payrollRecordSchema.index({ expireAt: 1 });
 
 // ============================================================================
 // Virtuals
@@ -171,17 +275,15 @@ payrollRecordSchema.methods.markAsPaid = function (
   transactionId: mongoose.Types.ObjectId,
   paidAt = new Date()
 ) {
+  // Validate state transition
+  const transition = PayrollStatusMachine.validateTransition(this.status, PAYROLL_STATUS.PAID);
+  if (!transition.success) {
+    throw new Error(transition.error);
+  }
+
   this.status = PAYROLL_STATUS.PAID;
   this.transactionId = transactionId;
   this.paidAt = paidAt;
-};
-
-payrollRecordSchema.methods.markAsCancelled = function (reason: string) {
-  if (this.status === PAYROLL_STATUS.PAID) {
-    throw new Error('Cannot cancel paid payroll record');
-  }
-  this.status = PAYROLL_STATUS.CANCELLED;
-  this.notes = (this.notes || '') + `\nCancelled: ${reason}`;
 };
 
 payrollRecordSchema.methods.addCorrection = function (
@@ -293,6 +395,238 @@ payrollRecordSchema.statics.getExpiringSoon = function (
   });
 };
 
+/**
+ * Calculate expireAt date based on retention period in years
+ *
+ * Use this to set jurisdiction-specific retention periods on payroll records.
+ *
+ * @param retentionYears - Number of years to retain (e.g., 7 for USA, 10 for Germany)
+ * @param fromDate - Base date to calculate from (defaults to now)
+ * @returns Date when the document should expire
+ *
+ * @example USA - 7 year retention
+ * const expireAt = PayrollRecord.calculateExpireAt(7);
+ * await PayrollRecord.create({ ...data, expireAt });
+ *
+ * @example Germany - 10 year retention
+ * const expireAt = PayrollRecord.calculateExpireAt(10);
+ *
+ * @example Never expire (compliance record)
+ * await PayrollRecord.create({ ...data }); // Don't set expireAt
+ */
+payrollRecordSchema.statics.calculateExpireAt = function (
+  retentionYears: number,
+  fromDate: Date = new Date()
+): Date {
+  const expireAt = new Date(fromDate);
+  expireAt.setFullYear(expireAt.getFullYear() + retentionYears);
+  return expireAt;
+};
+
+/**
+ * Configure TTL index for automatic document expiration
+ *
+ * This method sets up MongoDB's TTL (Time To Live) index on the expireAt field.
+ * Call this during application initialization to configure retention policy.
+ *
+ * @param ttlSeconds - Time in seconds after expireAt when document should be deleted.
+ *                     Set to 0 to delete immediately when expireAt is reached.
+ *                     Leave undefined to use default from config.
+ *
+ * @example Configure 7-year retention for USA
+ * ```typescript
+ * await PayrollRecord.configureRetention(0); // Delete when expireAt reached
+ *
+ * // Then set expireAt on records
+ * const record = await PayrollRecord.create({
+ *   ...data,
+ *   expireAt: PayrollRecord.calculateExpireAt(7) // 7 years from now
+ * });
+ * ```
+ *
+ * @example Disable TTL (never auto-delete)
+ * ```typescript
+ * await PayrollRecord.collection.dropIndex('expireAt_1');
+ * // Now documents never expire automatically
+ * ```
+ *
+ * Note: MongoDB's TTL thread runs every 60 seconds, so deletion is approximate.
+ */
+payrollRecordSchema.statics.configureRetention = async function (
+  ttlSeconds?: number
+): Promise<void> {
+  const collection = this.collection;
+  const indexName = 'expireAt_1';
+
+  try {
+    // Drop existing TTL index if it exists
+    const indexes = await collection.indexes();
+    const hasTTLIndex = indexes.some((idx) => idx.name === indexName);
+
+    if (hasTTLIndex) {
+      await collection.dropIndex(indexName);
+      logger.info('Dropped existing TTL index', { indexName });
+    }
+
+    // Create new TTL index with configured expireAfterSeconds
+    const expireAfterSeconds = ttlSeconds !== undefined
+      ? ttlSeconds
+      : HRM_CONFIG.dataRetention.payrollRecordsTTL;
+
+    if (expireAfterSeconds > 0 || expireAfterSeconds === 0) {
+      await collection.createIndex(
+        { expireAt: 1 },
+        {
+          name: indexName,
+          expireAfterSeconds,
+        }
+      );
+
+      logger.info('Configured TTL index for payroll records', {
+        expireAfterSeconds,
+        retentionYears: Math.round(expireAfterSeconds / (365.25 * 24 * 60 * 60) * 10) / 10,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to configure TTL index', {
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+/**
+ * Add TTL index on any date field for automatic cleanup
+ *
+ * Creates a TTL index that automatically deletes documents after a specified time
+ * from the date stored in the field. Useful for auto-cleanup of voided/reversed records.
+ *
+ * @param fieldName - Name of the date field (e.g., 'voidedAt', 'reversedAt', 'paidAt')
+ * @param ttlSeconds - Time in seconds after field date when document should be deleted
+ * @param options - Optional configuration
+ *
+ * @example Auto-delete voided records after 90 days
+ * ```typescript
+ * await PayrollRecord.addTTLIndex('voidedAt', 90 * 24 * 60 * 60);
+ * // Documents with voidedAt field will be deleted 90 days after voidedAt date
+ * ```
+ *
+ * @example Auto-delete reversed records after 1 year
+ * ```typescript
+ * await PayrollRecord.addTTLIndex('reversedAt', 365 * 24 * 60 * 60);
+ * ```
+ *
+ * @example Using helper for readability
+ * ```typescript
+ * const DAYS = 24 * 60 * 60;
+ * const YEARS = 365.25 * DAYS;
+ *
+ * await PayrollRecord.addTTLIndex('voidedAt', 90 * DAYS);
+ * await PayrollRecord.addTTLIndex('reversedAt', 1 * YEARS);
+ * ```
+ *
+ * @example Remove TTL index
+ * ```typescript
+ * await PayrollRecord.removeTTLIndex('voidedAt');
+ * ```
+ *
+ * Important Notes:
+ * - Only documents with the specified field set will be affected
+ * - MongoDB's TTL thread runs every 60 seconds, so deletion is approximate
+ * - You can have multiple TTL indexes on different fields
+ * - TTL indexes work with partialFilterExpression to only affect relevant documents
+ */
+payrollRecordSchema.statics.addTTLIndex = async function (
+  fieldName: string,
+  ttlSeconds: number,
+  options: { partialFilter?: Record<string, unknown> } = {}
+): Promise<void> {
+  const collection = this.collection;
+  const indexName = `${fieldName}_ttl_1`;
+
+  try {
+    // Drop existing TTL index if it exists
+    const indexes = await collection.indexes();
+    const hasTTLIndex = indexes.some((idx) => idx.name === indexName);
+
+    if (hasTTLIndex) {
+      await collection.dropIndex(indexName);
+      logger.info('Dropped existing TTL index', { indexName, fieldName });
+    }
+
+    // Build index options
+    const indexOptions: {
+      name: string;
+      expireAfterSeconds: number;
+      partialFilterExpression?: Record<string, unknown>;
+    } = {
+      name: indexName,
+      expireAfterSeconds: ttlSeconds,
+    };
+
+    // Add partial filter to only apply TTL to documents with this field set
+    indexOptions.partialFilterExpression = {
+      [fieldName]: { $exists: true, $ne: null },
+      ...options.partialFilter,
+    };
+
+    // Create TTL index
+    await collection.createIndex(
+      { [fieldName]: 1 },
+      indexOptions
+    );
+
+    logger.info('Added TTL index for auto-cleanup', {
+      fieldName,
+      indexName,
+      expireAfterSeconds: ttlSeconds,
+      retentionDays: Math.round(ttlSeconds / (24 * 60 * 60)),
+      partialFilter: indexOptions.partialFilterExpression,
+    });
+  } catch (error) {
+    logger.error('Failed to add TTL index', {
+      fieldName,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+/**
+ * Remove TTL index from a field
+ *
+ * @param fieldName - Name of the field to remove TTL index from
+ *
+ * @example
+ * ```typescript
+ * await PayrollRecord.removeTTLIndex('voidedAt');
+ * ```
+ */
+payrollRecordSchema.statics.removeTTLIndex = async function (
+  fieldName: string
+): Promise<void> {
+  const collection = this.collection;
+  const indexName = `${fieldName}_ttl_1`;
+
+  try {
+    const indexes = await collection.indexes();
+    const hasTTLIndex = indexes.some((idx) => idx.name === indexName);
+
+    if (hasTTLIndex) {
+      await collection.dropIndex(indexName);
+      logger.info('Removed TTL index', { fieldName, indexName });
+    } else {
+      logger.warn('TTL index not found', { fieldName, indexName });
+    }
+  } catch (error) {
+    logger.error('Failed to remove TTL index', {
+      fieldName,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
 // ============================================================================
 // Model Creation
 // ============================================================================
@@ -321,6 +655,14 @@ export interface PayrollRecordModel extends Model<PayrollRecordDocument> {
     organizationId: mongoose.Types.ObjectId,
     daysBeforeExpiry?: number
   ): ReturnType<Model<PayrollRecordDocument>['find']>;
+  calculateExpireAt(retentionYears: number, fromDate?: Date): Date;
+  configureRetention(ttlSeconds?: number): Promise<void>;
+  addTTLIndex(
+    fieldName: string,
+    ttlSeconds: number,
+    options?: { partialFilter?: Record<string, unknown> }
+  ): Promise<void>;
+  removeTTLIndex(fieldName: string): Promise<void>;
 }
 
 /**

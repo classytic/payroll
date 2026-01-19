@@ -63,14 +63,16 @@ export interface EmployeePluginOptions {
 
 /**
  * Mongoose plugin that adds HRM functionality to Employee schema
- * 
+ *
  * @example
+ * ```typescript
  * const employeeSchema = new Schema({
- *   ...employmentFields,
+ *   ...createEmploymentFields({ organizationRef: 'Branch' }),
  *   // Custom fields
  * });
- * 
+ *
  * employeeSchema.plugin(employeePlugin);
+ * ```
  */
 export function employeePlugin(
   schema: Schema,

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose, { Schema, model } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { createPayrollInstance, employmentFields, employeePlugin, createPayrollRecordSchema } from '../src/index.js';
+import { createPayrollInstance, createEmploymentFields, employeePlugin, createPayrollRecordSchema } from '../src/index.js';
 import { disableLogging } from '../src/utils/logger.js';
 import type { HRMConfig, EmployeeDocument, PayrollRecordDocument } from '../src/types.js';
 
@@ -33,7 +33,7 @@ describe('Config Propagation - Payroll.hire', () => {
   it('should use custom defaultCurrency from config when hiring', async () => {
     // Create Employee schema with payroll plugin
     const employeeSchema = new Schema({
-      ...employmentFields,
+      ...createEmploymentFields(),
     });
     employeeSchema.plugin(employeePlugin);
     const Employee = model<EmployeeDocument>('Employee_ConfigTest1', employeeSchema);
@@ -94,7 +94,7 @@ describe('Config Propagation - Payroll.hire', () => {
 
   it('should use custom defaultProbationMonths from config when hiring', async () => {
     const employeeSchema = new Schema({
-      ...employmentFields,
+      ...createEmploymentFields(),
     });
     employeeSchema.plugin(employeePlugin);
     const Employee = model<EmployeeDocument>('Employee_ConfigTest2', employeeSchema);
@@ -159,7 +159,7 @@ describe('Config Propagation - Payroll.hire', () => {
 
   it('should use package defaults when no custom config provided', async () => {
     const employeeSchema = new Schema({
-      ...employmentFields,
+      ...createEmploymentFields(),
     });
     employeeSchema.plugin(employeePlugin);
     const Employee = model<EmployeeDocument>('Employee_ConfigTest3', employeeSchema);
@@ -197,7 +197,7 @@ describe('Config Propagation - Payroll.hire', () => {
     });
 
     // Should use default currency from HRM_CONFIG
-    expect(employee.compensation.currency).toBe('BDT');
+    expect(employee.compensation.currency).toBe('USD');
 
     // Should use default 3 months probation from HRM_CONFIG
     const expectedProbationEnd = new Date('2024-01-01');

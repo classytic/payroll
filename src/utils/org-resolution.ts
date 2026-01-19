@@ -103,24 +103,51 @@ export function resolveOrganizationId(
   }
 
   // 3. Single-tenant auto-inject
+  // FIX: Check if single-tenant mode is enabled AND autoInject is not disabled
   if (container?.isSingleTenant()) {
     const singleTenantConfig = container.getSingleTenantConfig();
-    if (singleTenantConfig?.autoInject) {
+    const autoInjectEnabled = singleTenantConfig?.autoInject !== false; // default: true
+
+    if (autoInjectEnabled) {
       const orgId = container.getOrganizationId();
       if (orgId) {
         return toObjectId(orgId);
       }
+      // Single-tenant with autoInject but no organizationId configured
+      const operationName = operation || 'Operation';
+      throw new Error(
+        `${operationName}: Single-tenant mode with autoInject enabled requires organizationId in configuration.\n\n` +
+        'Fix by configuring organizationId:\n' +
+        '  const payroll = createPayrollInstance()\n' +
+        '    .withModels({ ... })\n' +
+        '    .forSingleTenant({ organizationId: YOUR_ORG_ID, autoInject: true })\n' +
+        '    .build();\n\n' +
+        'Or provide organizationId explicitly in each operation:\n' +
+        `  await payroll.${operation || 'method'}({ organizationId: org._id, ... });`
+      );
     }
+    // autoInject is explicitly disabled - fall through to require explicit orgId
   }
 
-  // 4. Error - no organizationId found
+  // 4. Error - no organizationId found (multi-tenant or single-tenant with autoInject: false)
   const operationName = operation || 'Operation';
+  const isSingleTenantNoAutoInject = container?.isSingleTenant() &&
+    container.getSingleTenantConfig()?.autoInject === false;
+
+  if (isSingleTenantNoAutoInject) {
+    throw new Error(
+      `${operationName} requires organizationId (autoInject is disabled in single-tenant config).\n\n` +
+      'Provide organizationId explicitly:\n' +
+      `  await payroll.${operation || 'method'}({ organizationId: org._id, ... });`
+    );
+  }
+
   throw new Error(
-    `${operationName} requires organizationId. ` +
+    `${operationName} requires organizationId in multi-tenant mode.\n\n` +
       'Options:\n' +
       '1. Provide it explicitly in parameters\n' +
       '2. Pass it via context (from middleware/auth)\n' +
-      '3. Enable single-tenant mode with autoInject: true\n\n' +
+      '3. Enable single-tenant mode with autoInject\n\n' +
       'Example (multi-tenant):\n' +
       `  await payroll.${operation || 'method'}({ organizationId: org._id, ... });\n\n` +
       'Example (single-tenant):\n' +

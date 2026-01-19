@@ -11,10 +11,8 @@ import type {
   Compensation,
   TaxCalculationResult,
   CompensationBreakdownResult,
-  ProRatingResult,
-  PayPeriodInfo,
 } from '../types.js';
-import { diffInDays } from './date.js';
+import { roundMoney } from './money.js';
 
 // ============================================================================
 // Basic Math Operations
@@ -49,25 +47,89 @@ export function sumDeductions(deductions: Array<{ amount: number }>): number {
 }
 
 /**
- * Apply percentage to amount
+ * ROUNDING POLICY FOR FINANCIAL CALCULATIONS
+ *
+ * Monetary amounts are stored as floating point numbers in major units with
+ * decimal precision (e.g., 1000.50 for $1,000.50 or ₹1,000.50).
+ *
+ * PRECISION: All calculations preserve 2 decimal places (cent/paise precision)
+ * to maintain accuracy required for payroll compliance.
+ *
+ * Rounding Rules:
+ * 1. Banker's Rounding (Round Half to Even): Used for fair rounding over many transactions
+ * 2. All intermediate calculations maintain full precision
+ * 3. Final amounts rounded to 2 decimals using banker's rounding
+ * 4. Tax calculations use banker's rounding for compliance
+ *
+ * Example:
+ *   Input: 1000.50 base + 15% tax
+ *   Calculation: 1000.50 * 0.15 = 150.075 → rounds to 150.08 (banker's rounding to 2 decimals)
+ *   Result: Tax = 150.08
+ *
+ * @see https://en.wikipedia.org/wiki/Rounding#Round_half_to_even
  */
-export function applyPercentage(amount: number, percentage: number): number {
-  return Math.round(amount * (percentage / 100));
+
+/**
+ * Banker's Rounding (Round Half to Even) - Integer precision
+ *
+ * Rounds to the nearest integer using banker's rounding (round half to even).
+ * This prevents systematic bias in rounding over many transactions.
+ *
+ * Uses epsilon check for safe floating-point comparison.
+ *
+ * Examples:
+ *   0.5 → 0 (even)
+ *   1.5 → 2 (even)
+ *   2.5 → 2 (even)
+ *   3.5 → 4 (even)
+ *
+ * @param value - The number to round
+ * @returns Rounded integer
+ * @note For money calculations with decimal precision, use `roundMoney()` instead
+ */
+export function bankersRound(value: number): number {
+  const floor = Math.floor(value);
+  const fraction = value - floor;
+
+  // Use epsilon check for safer floating-point comparison
+  if (Math.abs(fraction - 0.5) < Number.EPSILON) {
+    // If halfway, round to even
+    return floor % 2 === 0 ? floor : floor + 1;
+  }
+
+  // Otherwise use standard rounding
+  return Math.round(value);
+}
+
+/**
+ * Apply percentage to amount with banker's rounding (2 decimal precision)
+ *
+ * @param amount - Amount in major units (e.g., dollars, rupees)
+ * @param percentage - Percentage to apply (e.g., 15 for 15%)
+ * @param decimals - Decimal places for precision (default: 2 for cent precision)
+ * @returns Result in major units, properly rounded to 2 decimals
+ * @note Uses banker's rounding (round half to even) to preserve cent precision.
+ *       Equivalent to percentageOf() from money.ts.
+ */
+export function applyPercentage(amount: number, percentage: number, decimals = 2): number {
+  // Use centralized roundMoney for consistent banker's rounding across codebase
+  const result = (amount * percentage) / 100;
+  return roundMoney(result, decimals);
 }
 
 /**
  * Calculate percentage of total
  */
 export function calculatePercentage(part: number, total: number): number {
-  return total > 0 ? Math.round((part / total) * 100) : 0;
+  return total > 0 ? bankersRound((part / total) * 100) : 0;
 }
 
 /**
- * Round to decimal places
+ * Round to decimal places using banker's rounding
  */
 export function roundTo(value: number, decimals = 2): number {
   const factor = Math.pow(10, decimals);
-  return Math.round(value * factor) / factor;
+  return bankersRound(value * factor) / factor;
 }
 
 // ============================================================================
@@ -194,80 +256,14 @@ export function calculateCompensationBreakdown(
 }
 
 // ============================================================================
-// Pro-Rating Calculations
-// ============================================================================
-
-/**
- * Calculate pro-rating for mid-month hires
- */
-export function calculateProRating(
-  hireDate: Date,
-  periodStart: Date,
-  periodEnd: Date
-): ProRatingResult {
-  const totalDays = diffInDays(periodStart, periodEnd) + 1;
-
-  // Hired before period start - no pro-rating
-  if (hireDate <= periodStart) {
-    return {
-      isProRated: false,
-      totalDays,
-      actualDays: totalDays,
-      ratio: 1,
-    };
-  }
-
-  // Hired during the period - pro-rate
-  if (hireDate > periodStart && hireDate <= periodEnd) {
-    const actualDays = diffInDays(hireDate, periodEnd) + 1;
-    const ratio = actualDays / totalDays;
-
-    return {
-      isProRated: true,
-      totalDays,
-      actualDays,
-      ratio,
-    };
-  }
-
-  // Hired after period - no work days
-  return {
-    isProRated: false,
-    totalDays,
-    actualDays: 0,
-    ratio: 0,
-  };
-}
-
-/**
- * Apply pro-rating to an amount
- */
-export function applyProRating(
-  amount: number,
-  proRating: ProRatingResult
-): number {
-  return Math.round(amount * proRating.ratio);
-}
-
-/**
- * Calculate pro-rated salary
- */
-export function calculateProRatedSalary(
-  baseAmount: number,
-  hireDate: Date,
-  period: PayPeriodInfo
-): { amount: number; proRating: ProRatingResult } {
-  const proRating = calculateProRating(hireDate, period.startDate, period.endDate);
-  const amount = applyProRating(baseAmount, proRating);
-  return { amount, proRating };
-}
-
-// ============================================================================
 // Tax Calculations
 // ============================================================================
 
 /**
  * Apply tax brackets to calculate tax
+ *
+ * Uses banker's rounding for compliance (rounds to 2 decimal places).
+ * Consistent with all other money calculations in the system.
  */
 export function applyTaxBrackets(
   amount: number,
@@ -282,7 +278,8 @@ export function applyTaxBrackets(
     }
   }
 
-  return Math.round(tax);
+  // Use roundMoney for consistency with all other money calculations
+  return roundMoney(tax);
 }
 
 /**
@@ -298,44 +295,6 @@ export function calculateTax(
     tax,
     net: amount - tax,
   };
-}
-
-// ============================================================================
-// Functional Composition
-// ============================================================================
-
-/**
- * Pipe functions left-to-right
- * pipe(f, g, h)(x) === h(g(f(x)))
- */
-export function pipe<T>(...fns: Array<(value: T) => T>): (value: T) => T {
-  return (value: T) => fns.reduce((acc, fn) => fn(acc), value);
-}
-
-/**
- * Compose functions right-to-left
- * compose(f, g, h)(x) === f(g(h(x)))
- */
-export function compose<T>(...fns: Array<(value: T) => T>): (value: T) => T {
-  return (value: T) => fns.reduceRight((acc, fn) => fn(acc), value);
-}
-
-/**
- * Create an allowance calculator factory
- */
-export function createAllowanceCalculator(
-  allowances: Allowance[]
-): (baseSalary: number) => Array<Allowance & { calculatedAmount: number }> {
-  return (baseSalary: number) => calculateAllowances(allowances, baseSalary);
-}
-
-/**
- * Create a deduction calculator factory
- */
-export function createDeductionCalculator(
-  deductions: Deduction[]
-): (baseSalary: number) => Array<Deduction & { calculatedAmount: number }> {
-  return (baseSalary: number) => calculateDeductions(deductions, baseSalary);
 }
 
 // ============================================================================
@@ -393,15 +352,8 @@ export default {
   calculateAllowances,
   calculateDeductions,
   calculateCompensationBreakdown,
-  calculateProRating,
-  applyProRating,
-  calculateProRatedSalary,
   applyTaxBrackets,
   calculateTax,
-  pipe,
-  compose,
-  createAllowanceCalculator,
-  createDeductionCalculator,
   calculateOvertime,
   calculateHourlyRate,
   calculateDailyRate,

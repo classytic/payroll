@@ -1,10 +1,16 @@
 /**
- * @classytic/payroll - Payroll Service
+ * @classytic/payroll - Payroll Service (Refactored with Mongokit)
  *
- * High-level payroll operations with dependency injection
+ * High-level payroll operations using Repository pattern
+ *
+ * **Key Changes from v1:**
+ * - Uses Repository instead of direct Model access
+ * - Multi-tenant isolation handled by plugin (organizationId auto-injected)
+ * - Cleaner API (no need to pass organizationId to most methods)
  */
 
-import type { Model, ClientSession } from 'mongoose';
+import type { Repository } from '@classytic/mongokit';
+import type { ClientSession } from 'mongoose';
 import type {
   ObjectIdLike,
   PayrollRecordDocument,
@@ -24,29 +30,35 @@ import { logger } from '../utils/logger.js';
 import type { EmployeeService } from './employee.service.js';
 
 // ============================================================================
-// Payroll Service
+// Payroll Service (Mongokit Refactored)
 // ============================================================================
 
 export class PayrollService {
   constructor(
-    private readonly PayrollModel: Model<PayrollRecordDocument>,
+    private readonly payrollRepo: Repository<PayrollRecordDocument>,
     private readonly employeeService: EmployeeService
   ) {}
 
   /**
    * Find payroll by ID
+   *
+   * organizationId auto-scoped by multiTenantPlugin
    */
   async findById(
     payrollId: ObjectIdLike,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument | null> {
-    let query = this.PayrollModel.findById(toObjectId(payrollId));
-    
-    if (options.session) {
-      query = query.session(options.session);
-    }
-    
-    return query.exec();
+    // Use getAll to ensure organizationId filtering works at query level
+    // (getById after hooks don't properly override return values in mongokit)
+    const result = await this.payrollRepo.getAll(
+      {
+        filters: { _id: toObjectId(payrollId) },
+        limit: 1,
+      },
+      { session: options.session }
+    );
+
+    return result.docs[0] || null;
   }
 
   /**
@@ -54,70 +66,64 @@ export class PayrollService {
    */
   async findByEmployee(
     employeeId: ObjectIdLike,
-    organizationId: ObjectIdLike,
     options: { session?: ClientSession; limit?: number } = {}
   ): Promise<PayrollRecordDocument[]> {
-    const query = payrollQuery()
-      .forEmployee(employeeId)
-      .forOrganization(organizationId)
-      .build();
+    // organizationId automatically added by multiTenantPlugin
+    const result = await this.payrollRepo.getAll(
+      {
+        filters: { employeeId: toObjectId(employeeId) },
+        sort: { 'period.year': -1, 'period.month': -1 },
+        limit: options.limit || 12,
+      },
+      { session: options.session }
+    );
 
-    let mongooseQuery = this.PayrollModel.find(query)
-      .sort({ 'period.year': -1, 'period.month': -1 })
-      .limit(options.limit || 12);
-    
-    if (options.session) {
-      mongooseQuery = mongooseQuery.session(options.session);
-    }
-    
-    return mongooseQuery.exec();
+    return result.docs;
   }
 
   /**
    * Find payrolls for a period
    */
   async findForPeriod(
-    organizationId: ObjectIdLike,
     month: number,
     year: number,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument[]> {
-    const query = payrollQuery()
-      .forOrganization(organizationId)
-      .forPeriod(month, year)
-      .build();
+    // organizationId automatically added by multiTenantPlugin
+    const result = await this.payrollRepo.getAll(
+      {
+        filters: {
+          'period.month': month,
+          'period.year': year,
+        },
+      },
+      { session: options.session }
+    );
 
-    let mongooseQuery = this.PayrollModel.find(query);
-    
-    if (options.session) {
-      mongooseQuery = mongooseQuery.session(options.session);
-    }
-    
-    return mongooseQuery.exec();
+    return result.docs;
   }
 
   /**
    * Find pending payrolls
    */
   async findPending(
-    organizationId: ObjectIdLike,
     month: number,
     year: number,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument[]> {
-    const query = payrollQuery()
-      .forOrganization(organizationId)
-      .forPeriod(month, year)
-      .pending()
-      .build();
+    // organizationId automatically added by multiTenantPlugin
+    const result = await this.payrollRepo.getAll(
+      {
+        filters: {
+          'period.month': month,
+          'period.year': year,
+          status: 'pending',
+        },
+      },
+      { session: options.session }
+    );
 
-    let mongooseQuery = this.PayrollModel.find(query);
-    
-    if (options.session) {
-      mongooseQuery = mongooseQuery.session(options.session);
-    }
-    
-    return mongooseQuery.exec();
+    return result.docs;
   }
 
   /**
@@ -125,368 +131,327 @@ export class PayrollService {
    */
   async findByEmployeeAndPeriod(
     employeeId: ObjectIdLike,
-    organizationId: ObjectIdLike,
     month: number,
     year: number,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument | null> {
-    const query = payrollQuery()
-      .forEmployee(employeeId)
-      .forOrganization(organizationId)
-      .forPeriod(month, year)
-      .build();
-
-    let mongooseQuery = this.PayrollModel.findOne(query);
-    
-    if (options.session) {
-      mongooseQuery = mongooseQuery.session(options.session);
-    }
-    
-    return mongooseQuery.exec();
+    // organizationId automatically added by multiTenantPlugin
+    return this.payrollRepo.getByQuery(
+      {
+        employeeId: toObjectId(employeeId),
+        'period.month': month,
+        'period.year': year,
+      },
+      { session: options.session }
+    );
   }
 
   /**
    * Create payroll record
+   *
+   * organizationId auto-injected by multiTenantPlugin
    */
   async create(
     data: PayrollData,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    const [payroll] = await this.PayrollModel.create([data], {
+    const payroll = await this.payrollRepo.create(data as any, {
       session: options.session,
     });
 
     logger.info('Payroll record created', {
       payrollId: payroll._id.toString(),
-      employeeId: payroll.employeeId.toString(),
+      employeeId: (payroll as any).employeeId.toString(),
     });
 
     return payroll;
   }
 
   /**
-   * Generate payroll for employee with organization validation
-   * 
-   * ⚠️ SECURITY: Validates employee belongs to organization
+   * Generate payroll for employee
+   *
+   * organizationId auto-scoped by multiTenantPlugin
    */
   async generateForEmployee(
     employeeId: ObjectIdLike,
-    organizationId: ObjectIdLike,
     month: number,
     year: number,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    // Use secure findById with org validation
-    const employee = await this.employeeService.findById(employeeId, organizationId, options);
+    // Employee lookup auto-scoped by multiTenantPlugin
+    const employee = await this.employeeService.findById(employeeId, options);
+
     if (!employee) {
-      throw new Error(`Employee not found in organization ${organizationId}`);
+      throw new Error(`Employee not found: ${employeeId}`);
     }
 
     if (!canReceiveSalary(employee)) {
-      throw new Error('Employee not eligible for payroll');
-    }
-
-    // Check if payroll already exists
-    const existing = await this.findByEmployeeAndPeriod(
-      employeeId,
-      organizationId,
-      month,
-      year,
-      options
-    );
-    if (existing) {
-      throw new Error('Payroll already exists for this period');
+      throw new Error('Employee is not eligible to receive salary');
     }
 
     const payrollData = PayrollFactory.create({
-      employeeId,
-      organizationId,
+      employeeId: employee._id,
+      organizationId: employee.organizationId,
       baseAmount: employee.compensation.baseAmount,
-      allowances: employee.compensation.allowances || [],
-      deductions: employee.compensation.deductions || [],
+      allowances: employee.compensation.allowances,
+      deductions: employee.compensation.deductions,
       period: { month, year },
-      metadata: { currency: employee.compensation.currency },
     });
-
     return this.create(payrollData, options);
   }
 
   /**
-   * Generate batch payroll
+   * Generate bulk payroll
+   *
+   * organizationId auto-scoped by multiTenantPlugin
    */
-  async generateBatch(
-    organizationId: ObjectIdLike,
+  async generateBulk(
+    employeeIds: ObjectIdLike[],
     month: number,
     year: number,
     options: { session?: ClientSession } = {}
-  ): Promise<{
-    success: boolean;
-    generated: number;
-    skipped: number;
-    payrolls: PayrollRecordDocument[];
-    message: string;
-  }> {
-    const employees = await this.employeeService.findEligibleForPayroll(
-      organizationId,
-      options
-    );
+  ): Promise<PayrollRecordDocument[]> {
+    const payrolls: PayrollRecordDocument[] = [];
 
-    if (employees.length === 0) {
-      return {
-        success: true,
-        generated: 0,
-        skipped: 0,
-        payrolls: [],
-        message: 'No eligible employees',
-      };
+    for (const employeeId of employeeIds) {
+      try {
+        const payroll = await this.generateForEmployee(employeeId, month, year, options);
+        payrolls.push(payroll);
+      } catch (error) {
+        logger.error('Failed to generate payroll for employee', {
+          employeeId: employeeId.toString(),
+          error: (error as Error).message,
+        });
+        // Continue with other employees
+      }
     }
 
-    // Get existing payrolls
-    const existingPayrolls = await this.findForPeriod(
-      organizationId,
-      month,
-      year,
-      options
-    );
-    const existingEmployeeIds = new Set(
-      existingPayrolls.map((p) => p.employeeId.toString())
-    );
-
-    // Filter out employees who already have payroll
-    const eligibleEmployees = employees.filter(
-      (emp) => !existingEmployeeIds.has(emp._id.toString())
-    );
-
-    if (eligibleEmployees.length === 0) {
-      return {
-        success: true,
-        generated: 0,
-        skipped: employees.length,
-        payrolls: [],
-        message: 'Payrolls already exist for all employees',
-      };
-    }
-
-    const payrollsData = BatchPayrollFactory.createBatch(eligibleEmployees, {
-      month,
-      year,
-      organizationId,
-    });
-
-    const created = await this.PayrollModel.insertMany(payrollsData, {
-      session: options.session,
-    });
-
-    logger.info('Batch payroll generated', {
-      organizationId: organizationId.toString(),
-      month,
-      year,
-      count: created.length,
-    });
-
-    return {
-      success: true,
-      generated: created.length,
-      skipped: existingEmployeeIds.size,
-      payrolls: created as PayrollRecordDocument[],
-      message: `Generated ${created.length} payrolls`,
-    };
+    return payrolls;
   }
 
   /**
-   * Mark payroll as paid with organization validation
-   * 
-   * ⚠️ SECURITY: Validates payroll belongs to organization
+   * Mark payroll as paid
    */
   async markAsPaid(
     payrollId: ObjectIdLike,
-    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
-    paymentDetails: {
-      paidAt?: Date;
-      transactionId?: ObjectIdLike;
-      paymentMethod?: PaymentMethod;
-    } = {},
-    options: { session?: ClientSession } = {}
+    transactionIdOrOptions?: ObjectIdLike | { session?: ClientSession; paidAt?: Date },
+    options?: { session?: ClientSession; paidAt?: Date }
   ): Promise<PayrollRecordDocument> {
-    // Verify payroll belongs to organization
-    const query = {
-      _id: toObjectId(payrollId),
-      organizationId: toObjectId(organizationId),
+    // Handle both old and new signatures
+    let transactionId: ObjectIdLike | undefined;
+    let resolvedOptions: { session?: ClientSession; paidAt?: Date } = {};
+
+    if (transactionIdOrOptions) {
+      // Check if it's an ObjectId or options object
+      if (typeof transactionIdOrOptions === 'object' && ('session' in transactionIdOrOptions || 'paidAt' in transactionIdOrOptions)) {
+        // Old signature: markAsPaid(payrollId, { session, paidAt })
+        resolvedOptions = transactionIdOrOptions;
+        transactionId = undefined;
+      } else {
+        // New signature: markAsPaid(payrollId, transactionId, { session, paidAt })
+        transactionId = transactionIdOrOptions as ObjectIdLike;
+        resolvedOptions = options || {};
+      }
+    } else {
+      resolvedOptions = options || {};
+    }
+
+    // Fetch first to ensure cross-org updates are blocked
+    const existing = await this.findById(payrollId, resolvedOptions);
+    if (!existing) {
+      throw new Error(`Payroll not found: ${payrollId}`);
+    }
+
+    // Validate state transition
+    const { PayrollStatusMachine } = await import('../core/payroll-states.js');
+    if (!PayrollStatusMachine.canTransition(existing.status, 'paid')) {
+      const validNext = PayrollStatusMachine.getNextStates(existing.status);
+      throw new Error(
+        `Invalid status transition: Cannot transition from ${existing.status} to paid. Valid transitions: ${validNext.join(', ')}`
+      );
+    }
+
+    const updateData: any = {
+      status: 'paid',
+      paidAt: resolvedOptions.paidAt || new Date(),
     };
 
-    let payrollFindQuery = this.PayrollModel.findOne(query);
-    if (options.session) {
-      payrollFindQuery = payrollFindQuery.session(options.session);
-    }
-    
-    const payroll = await payrollFindQuery;
-    if (!payroll) {
-      throw new Error(`Payroll not found in organization ${organizationId}`);
+    if (transactionId) {
+      updateData.transactionId = toObjectId(transactionId);
     }
 
-    if (payroll.status === 'paid') {
-      throw new Error('Payroll already paid');
-    }
-
-    const payrollObj = payroll.toObject() as {
-      status: string;
-      paidAt: Date | null;
-      processedAt: Date | null;
-      metadata: Record<string, unknown>;
-    };
-    const updatedData = PayrollFactory.markAsPaid(payrollObj, paymentDetails);
-
-    const updated = await this.PayrollModel.findByIdAndUpdate(
+    const payroll = await this.payrollRepo.update(
       payrollId,
-      updatedData,
-      { new: true, runValidators: true, session: options.session }
+      updateData,
+      { session: resolvedOptions.session }
     );
-
-    if (!updated) {
-      throw new Error('Failed to update payroll');
-    }
 
     logger.info('Payroll marked as paid', {
-      payrollId: payrollId.toString(),
+      payrollId: payroll._id.toString(),
     });
 
-    return updated;
+    return payroll;
   }
 
   /**
-   * Mark payroll as processed with organization validation
-   * 
-   * ⚠️ SECURITY: Validates payroll belongs to organization
+   * Update payroll status
    */
-  async markAsProcessed(
+  async updateStatus(
     payrollId: ObjectIdLike,
-    organizationId: ObjectIdLike,  // Required for multi-tenant isolation
+    status: PayrollStatus,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    // Verify payroll belongs to organization
-    const query = {
-      _id: toObjectId(payrollId),
-      organizationId: toObjectId(organizationId),
-    };
-
-    let payrollFindQuery = this.PayrollModel.findOne(query);
-    if (options.session) {
-      payrollFindQuery = payrollFindQuery.session(options.session);
-    }
-    
-    const payroll = await payrollFindQuery;
-    if (!payroll) {
-      throw new Error(`Payroll not found in organization ${organizationId}`);
+    // Fetch first to ensure cross-org updates are blocked
+    const existing = await this.findById(payrollId, options);
+    if (!existing) {
+      throw new Error(`Payroll not found: ${payrollId}`);
     }
 
-    const payrollObj = payroll.toObject() as { status: string; processedAt: Date | null };
-    const updatedData = PayrollFactory.markAsProcessed(payrollObj);
+    // Validate state transition (allow idempotent same-status updates)
+    if (existing.status !== status) {
+      const { PayrollStatusMachine } = await import('../core/payroll-states.js');
+      if (!PayrollStatusMachine.canTransition(existing.status, status)) {
+        const validNext = PayrollStatusMachine.getNextStates(existing.status);
+        throw new Error(
+          `Invalid status transition: Cannot transition from ${existing.status} to ${status}. Valid transitions: ${validNext.join(', ')}`
+        );
+      }
+    }
 
-    const updated = await this.PayrollModel.findByIdAndUpdate(
+    return this.payrollRepo.update(
       payrollId,
-      updatedData,
-      { new: true, runValidators: true, session: options.session }
+      { status },
+      { session: options.session }
     );
-
-    if (!updated) {
-      throw new Error('Failed to update payroll');
-    }
-
-    return updated;
   }
 
   /**
-   * Calculate period summary
+   * Add correction to payroll
    */
-  async calculatePeriodSummary(
-    organizationId: ObjectIdLike,
-    month: number,
-    year: number,
+  async addCorrection(
+    payrollId: ObjectIdLike,
+    previousAmount: number,
+    newAmount: number,
+    reason: string,
+    correctedBy: ObjectIdLike,
+    options: { session?: ClientSession } = {}
+  ): Promise<PayrollRecordDocument> {
+    const payroll = await this.findById(payrollId, options);
+
+    if (!payroll) {
+      throw new Error(`Payroll not found: ${payrollId}`);
+    }
+
+    // Add correction using document method
+    (payroll as any).addCorrection(previousAmount, newAmount, reason, toObjectId(correctedBy));
+
+    await payroll.save({ session: options.session });
+
+    return payroll;
+  }
+
+  /**
+   * Get summary for organization
+   *
+   * organizationId auto-scoped by multiTenantPlugin
+   */
+  async getSummary(
+    month?: number,
+    year?: number,
     options: { session?: ClientSession } = {}
   ): Promise<{
-    period: { month: number; year: number };
-    count: number;
     totalGross: number;
     totalNet: number;
-    totalAllowances: number;
-    totalDeductions: number;
-    byStatus: Record<string, number>;
+    count: number;
+    paidCount: number;
   }> {
-    const payrolls = await this.findForPeriod(organizationId, month, year, options);
-    const summary = BatchPayrollFactory.calculateTotalPayroll(payrolls);
+    // organizationId automatically added by multiTenantPlugin in aggregation
+    const filters: Record<string, unknown> = {};
 
-    return {
-      period: { month, year },
-      ...summary,
-      byStatus: this.groupByStatus(payrolls),
-    };
+    if (month) filters['period.month'] = month;
+    if (year) filters['period.year'] = year;
+
+    const pipeline = [
+      { $match: filters },
+      {
+        $group: {
+          _id: null,
+          totalGross: { $sum: '$breakdown.grossSalary' },
+          totalNet: { $sum: '$breakdown.netSalary' },
+          count: { $sum: 1 },
+          paidCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] },
+          },
+        },
+      },
+    ];
+
+    const results = await this.payrollRepo.aggregate<{ totalGross: number; totalNet: number; count: number; paidCount: number }>(
+      pipeline,
+      { session: options.session }
+    );
+
+    return results[0] || { totalGross: 0, totalNet: 0, count: 0, paidCount: 0 };
   }
 
   /**
-   * Get employee payroll history
+   * Check if payroll exists
    */
-  async getEmployeePayrollHistory(
+  async exists(
     employeeId: ObjectIdLike,
-    organizationId: ObjectIdLike,
-    limit = 12,
+    month: number,
+    year: number
+  ): Promise<boolean> {
+    // organizationId automatically added by multiTenantPlugin
+    const result = await this.payrollRepo.exists({
+      employeeId: toObjectId(employeeId),
+      'period.month': month,
+      'period.year': year,
+    });
+
+    return result !== null;
+  }
+
+  /**
+   * Count payrolls
+   */
+  async count(filters: Record<string, unknown> = {}): Promise<number> {
+    // organizationId automatically added by multiTenantPlugin
+    return this.payrollRepo.count(filters);
+  }
+
+  /**
+   * Export payrolls for date range
+   */
+  async exportForDateRange(
+    startDate: Date,
+    endDate: Date,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument[]> {
-    return this.findByEmployee(employeeId, organizationId, { ...options, limit });
-  }
-
-  /**
-   * Get overview stats
-   */
-  async getOverviewStats(
-    organizationId: ObjectIdLike,
-    options: { session?: ClientSession } = {}
-  ): Promise<{
-    currentPeriod: { month: number; year: number };
-    count: number;
-    totalGross: number;
-    totalNet: number;
-    totalAllowances: number;
-    totalDeductions: number;
-    byStatus: Record<string, number>;
-  }> {
-    const { month, year } = getCurrentPeriod();
-    const result = await this.calculatePeriodSummary(organizationId, month, year, options);
-    return {
-      currentPeriod: result.period,
-      count: result.count,
-      totalGross: result.totalGross,
-      totalNet: result.totalNet,
-      totalAllowances: result.totalAllowances,
-      totalDeductions: result.totalDeductions,
-      byStatus: result.byStatus,
-    };
-  }
-
-  /**
-   * Group payrolls by status
-   */
-  private groupByStatus(payrolls: PayrollRecordDocument[]): Record<string, number> {
-    return payrolls.reduce(
-      (acc, payroll) => {
-        acc[payroll.status] = (acc[payroll.status] || 0) + 1;
-        return acc;
+    // organizationId automatically added by multiTenantPlugin
+    const result = await this.payrollRepo.getAll(
+      {
+        filters: {
+          'period.startDate': { $gte: startDate },
+          'period.endDate': { $lte: endDate },
+        },
+        sort: { 'period.year': -1, 'period.month': -1 },
       },
-      {} as Record<string, number>
+      { session: options.session }
     );
+
+    return result.docs;
   }
 }
-
-// ============================================================================
-// Factory Function
-// ============================================================================
 
 /**
- * Create payroll service instance
+ * Factory function to create PayrollService
  */
 export function createPayrollService(
-  PayrollModel: Model<PayrollRecordDocument>,
+  payrollRepo: Repository<PayrollRecordDocument>,
   employeeService: EmployeeService
 ): PayrollService {
-  return new PayrollService(PayrollModel, employeeService);
+  return new PayrollService(payrollRepo, employeeService);
 }
 
+export default PayrollService;

@@ -298,6 +298,38 @@ export function isDateInRange(date: Date, start: Date, end: Date): boolean {
 }
 
 /**
+ * Check if an item with effectiveFrom/effectiveTo dates is effective for a given period.
+ *
+ * Used for filtering allowances, deductions, and other time-bounded compensation items.
+ * An item is considered effective if its date range overlaps with the period.
+ *
+ * @param item - Object with optional effectiveFrom and effectiveTo dates
+ * @param periodStart - Start of the period to check
+ * @param periodEnd - End of the period to check
+ * @returns true if the item is effective during any part of the period
+ *
+ * @example
+ * ```typescript
+ * const allowance = { effectiveFrom: new Date('2024-01-01'), effectiveTo: null };
+ * const periodStart = new Date('2024-03-01');
+ * const periodEnd = new Date('2024-03-31');
+ *
+ * isEffectiveForPeriod(allowance, periodStart, periodEnd); // true
+ * ```
+ */
+export function isEffectiveForPeriod(
+  item: { effectiveFrom?: Date | null; effectiveTo?: Date | null },
+  periodStart: Date,
+  periodEnd: Date
+): boolean {
+  const effectiveFrom = item.effectiveFrom ? new Date(item.effectiveFrom) : new Date(0);
+  const effectiveTo = item.effectiveTo ? new Date(item.effectiveTo) : new Date('2099-12-31');
+
+  // Item is effective if its range overlaps with the period
+  return effectiveFrom <= periodEnd && effectiveTo >= periodStart;
+}
+
+/**
  * Get date range for a pay period
  */
 export function getPayPeriodDateRange(
@@ -398,6 +430,7 @@ export default {
   isOnProbation,
   calculateYearsOfService,
   isDateInRange,
+  isEffectiveForPeriod,
   getPayPeriodDateRange,
   formatDateForDB,
   parseDBDate,

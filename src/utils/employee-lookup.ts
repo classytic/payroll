@@ -33,6 +33,21 @@ export interface SecureEmployeeLookupOptions {
   organizationId?: ObjectIdLike;
 
   /**
+   * Strict multi-tenant mode
+   *
+   * When true (default), throws if organizationId is not provided.
+   * This prevents accidental cross-tenant data leaks.
+   *
+   * Set to false ONLY for:
+   * - Single-tenant applications with auto-inject configured
+   * - Migration scripts with explicit security review
+   *
+   * @default true (secure by default)
+   * @since v3.0.0
+   */
+  strictMultiTenant?: boolean;
+
+  /**
    * Employee's Mongoose _id (ObjectId)
    * Use this when you have the database ID
    * Takes priority over employeeId if both are provided
@@ -93,14 +108,17 @@ export interface SecureEmployeeLookupOptions {
 
 /**
  * Securely find an employee by various identifiers
- * ALWAYS enforces organizationId for multi-tenant isolation
+ *
+ * SECURITY: By default (strictMultiTenant=true), this function REQUIRES organizationId
+ * and will throw an error if not provided. This prevents cross-tenant data leaks.
  *
  * @param model - Employee model
  * @param options - Lookup options
  * @returns Employee document or throws EmployeeNotFoundError
+ * @throws Error if organizationId not provided in strict mode (default)
  *
  * @example
- * // By ObjectId _id
+ * // By ObjectId _id (organizationId required)
  * const emp = await findEmployeeSecure(Employee, {
  *   _id: employee._id,
  *   organizationId: org._id
@@ -122,10 +140,10 @@ export interface SecureEmployeeLookupOptions {
  * });
  *
  * @example
- * // By userId
+ * // Single-tenant mode (explicitly opt-out of strict mode)
  * const emp = await findEmployeeSecure(Employee, {
- *   userId: user._id,
- *   organizationId: org._id
+ *   employeeId: "EMP-001",
+ *   strictMultiTenant: false,  // Only for single-tenant apps!
  * });
  */
 export async function findEmployeeSecure<T extends EmployeeDocument>(
@@ -134,6 +152,7 @@ export async function findEmployeeSecure<T extends EmployeeDocument>(
 ): Promise<T> {
   const {
     organizationId,
+    strictMultiTenant = true, // SECURITY: Default to strict mode to prevent cross-tenant leaks
     _id,
     employeeId,
     employeeIdMode = 'auto',
@@ -146,7 +165,15 @@ export async function findEmployeeSecure<T extends EmployeeDocument>(
   // Build query with organizationId isolation
   const query: Record<string, any> = {};
 
-  // CRITICAL: Always include organizationId for multi-tenant safety
+  // STRICT MODE: Enforce organizationId in multi-tenant apps
+  if (strictMultiTenant && !organizationId) {
+    throw new Error(
+      'findEmployeeSecure requires organizationId in strict multi-tenant mode. ' +
+      'Set strictMultiTenant: false for single-tenant apps.'
+    );
+  }
+
+  // Include organizationId for multi-tenant safety
   if (organizationId) {
     query.organizationId = toObjectId(organizationId);
   }
@@ -174,7 +201,8 @@ export async function findEmployeeSecure<T extends EmployeeDocument>(
   } else if (userId) {
     query.userId = toObjectId(userId);
   } else if (email) {
-    query.email = email;
+    // Normalize email (lowercase + trim) to match schema storage format
+    query.email = email.toLowerCase().trim();
   } else {
     throw new Error(
       'findEmployeeSecure requires at least one identifier: _id, employeeId, userId, or email'

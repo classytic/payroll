@@ -348,7 +348,7 @@ export class EmployeeBuilder {
   withBaseSalary(
     amount: number,
     frequency: PaymentFrequency = 'monthly',
-    currency = 'BDT'
+    currency = 'USD'
   ): this {
     this.data.compensation = {
       ...this.data.compensation!,

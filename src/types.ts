@@ -46,9 +46,6 @@ export type DeepPartial<T> = {
 /** Nullable type helper */
 export type Nullable<T> = T | null;
 
-/** Record with string keys */
-export type StringRecord<T> = Record<string, T>;
-
 // ============================================================================
 // Enum Types (const assertions for better inference)
 // ============================================================================
@@ -126,7 +123,8 @@ export type PayrollStatus =
   | 'processing'
   | 'paid'
   | 'failed'
-  | 'cancelled';
+  | 'voided'
+  | 'reversed';
 
 /** Termination reason */
 export type TerminationReason =
@@ -523,8 +521,61 @@ export interface PayrollRecordDocument extends Document {
   exported: boolean;
   exportedAt?: Date | null;
   corrections?: PayrollCorrection[];
+
+  /**
+   * Payroll run type (regular, off-cycle, supplemental, retroactive)
+   * Default: 'regular'
+   */
+  payrollRunType?: PayrollRunType;
+
+  /**
+   * Retroactive adjustment details (for back-pay or corrections)
+   * Only populated when payrollRunType is 'retroactive'
+   */
+  retroactiveAdjustment?: RetroactiveAdjustment;
+
+  /**
+   * Employer contributions for this payroll
+   * Costs borne by employer (not deducted from employee pay)
+   */
+  employerContributions?: EmployerContribution[];
+
+  // Soft delete / void / reversal fields (v2.4.0+)
+  /** Whether this record has been voided or reversed */
+  isVoided?: boolean;
+  /** When the record was voided/reversed */
+  voidedAt?: Date | null;
+  /** User who voided/reversed the record */
+  voidedBy?: ObjectId | null;
+  /** Reason for voiding/reversing */
+  voidReason?: string | null;
+  /** When the record was reversed (for REVERSED status) */
+  reversedAt?: Date | null;
+  /** User who reversed the record */
+  reversedBy?: ObjectId | null;
+  /** Reason for reversing the record */
+  reversalReason?: string | null;
+  /** For reversed payrolls: ID of the reversal transaction */
+  reversalTransactionId?: ObjectId | null;
+  /** For reversal records: ID of the original payroll record being reversed */
+  originalPayrollId?: ObjectId | null;
+
   createdAt?: Date;
   updatedAt?: Date;
+
+  /**
+   * Optional per-document expiration date for MongoDB TTL index.
+   *
+   * When set, this document will be automatically deleted by MongoDB at this date,
+   * overriding the global TTL configuration. Use for jurisdiction-specific retention.
+   *
+   * @example 7-year retention for USA
+   * expireAt: new Date(Date.now() + 7 * 365 * 24 * 60 * 60 * 1000)
+   *
+   * @example Never expire
+   * expireAt: undefined
+   */
+  expireAt?: Date | null;
   save(options?: { session?: ClientSession }): Promise<this>;
   toObject(): Record<string, unknown>;
 }
@@ -718,26 +769,6 @@ export interface ReHireEmployeeParams extends EmployeeOperationParams {
   compensation?: DeepPartial<Compensation>;
 }
 
-/** List employees parameters */
-export interface ListEmployeesParams {
-  /** Organization ID */
-  organizationId: ObjectIdLike;
-  /** Filters */
-  filters?: {
-    status?: EmployeeStatus;
-    department?: Department;
-    employmentType?: EmploymentType;
-    minSalary?: number;
-    maxSalary?: number;
-  };
-  /** Pagination */
-  pagination?: {
-    page?: number;
-    limit?: number;
-    sort?: Record<string, 1 | -1>;
-  };
-}
-
 /** Update salary parameters */
 export interface UpdateSalaryParams extends EmployeeOperationParams {
   /** Compensation updates */
@@ -818,6 +849,60 @@ export interface GetEmployeeParams extends EmployeeOperationParams {
   session?: import('mongoose').ClientSession;
 }
 
+/**
+ * Payroll run types
+ *
+ * - `regular`: Normal monthly/bi-weekly payroll cycle
+ * - `off-cycle`: Unscheduled payroll run (bonuses, corrections, missed payments)
+ * - `supplemental`: Additional payment outside regular cycle (commissions, one-time bonuses)
+ * - `retroactive`: Adjustment for previous period (back-pay, corrections)
+ */
+export type PayrollRunType = 'regular' | 'off-cycle' | 'supplemental' | 'retroactive';
+
+/**
+ * Retroactive adjustment details
+ *
+ * Used when correcting payroll from a previous period
+ */
+export interface RetroactiveAdjustment {
+  /** Original period being adjusted */
+  originalPeriod: {
+    month: number;
+    year: number;
+  };
+  /** Original payroll record ID being corrected */
+  originalPayrollId?: ObjectId;
+  /** Reason for retroactive adjustment */
+  reason: string;
+  /** Adjustment amount (positive for back-pay, negative for recovery) */
+  adjustmentAmount: number;
+  /** Whether this was approved by management */
+  approved?: boolean;
+  /** Approver user ID */
+  approvedBy?: ObjectId;
+  /** Approval date */
+  approvedAt?: Date;
+}
+
+/**
+ * Employer contributions (beyond employee tax withholding)
+ *
+ * These are costs borne by the employer, not deducted from employee pay.
+ * Examples: Social security (employer portion), pension matching, unemployment insurance
+ */
+export interface EmployerContribution {
+  /** Type of contribution */
+  type: 'social_security' | 'pension' | 'unemployment' | 'health_insurance' | 'other';
+  /** Contribution amount */
+  amount: number;
+  /** Description */
+  description?: string;
+  /** Whether this is mandatory by law */
+  mandatory?: boolean;
+  /** Reference number for filing */
+  referenceNumber?: string;
+}
+
 /** Process salary parameters */
 export interface ProcessSalaryParams extends EmployeeOperationParams {
   /** Month (1-12) */
@@ -828,6 +913,24 @@ export interface ProcessSalaryParams extends EmployeeOperationParams {
   paymentDate?: Date;
   /** Payment method */
   paymentMethod?: PaymentMethod;
+  /**
+   * Payroll run type (default: 'regular')
+   *
+   * Use for off-cycle payments, supplemental runs, or retroactive adjustments
+   */
+  payrollRunType?: PayrollRunType;
+  /**
+   * Retroactive adjustment details
+   *
+   * Required when payrollRunType is 'retroactive'
+   */
+  retroactiveAdjustment?: RetroactiveAdjustment;
+  /**
+   * Employer contributions for this payroll
+   *
+   * These are costs borne by the employer (not deducted from employee pay)
+   */
+  employerContributions?: EmployerContribution[];
   /**
    * Idempotency key (Stripe-style)
    * If provided, duplicate calls with same key return cached result
@@ -971,6 +1074,113 @@ export interface ExportPayrollParams {
 }
 
 // ============================================================================
+// Void / Reversal Types (v2.4.0+)
+// ============================================================================
+
+/**
+ * Void payroll parameters
+ *
+ * Use this for payrolls that haven't been paid yet (pending, processing, failed).
+ * Voiding marks the record as invalid without creating a reversal transaction.
+ *
+ * @example
+ * ```typescript
+ * await payroll.voidPayroll({
+ *   organizationId: org._id,
+ *   payrollRecordId: record._id,
+ *   reason: 'Test payroll - not intended for production',
+ *   context: { userId: admin._id },
+ * });
+ * ```
+ */
+export interface VoidPayrollParams {
+  /** Organization ID for multi-tenant isolation */
+  organizationId: ObjectIdLike;
+  /** Payroll record ID to void */
+  payrollRecordId: ObjectIdLike;
+  /** Reason for voiding (required for audit trail) */
+  reason: string;
+  /** Operation context */
+  context?: OperationContext;
+  /** Also void/cancel the associated transaction */
+  voidTransaction?: boolean;
+}
+
+/**
+ * Reverse payroll parameters
+ *
+ * Use this for payrolls that have already been paid.
+ * Creates a reversal (negative) transaction to offset the original payment.
+ *
+ * @example
+ * ```typescript
+ * const result = await payroll.reversePayroll({
+ *   organizationId: org._id,
+ *   payrollRecordId: record._id,
+ *   reason: 'Duplicate payment - reversing',
+ *   createReversalTransaction: true,
+ *   context: { userId: admin._id },
+ * });
+ * console.log(result.reversalTransaction); // Negative amount transaction
+ * ```
+ */
+export interface ReversePayrollParams {
+  /** Organization ID for multi-tenant isolation */
+  organizationId: ObjectIdLike;
+  /** Payroll record ID to reverse */
+  payrollRecordId: ObjectIdLike;
+  /** Reason for reversal (required for audit trail) */
+  reason: string;
+  /** Create a reversal (negative) transaction (default: true) */
+  createReversalTransaction?: boolean;
+  /** Operation context */
+  context?: OperationContext;
+}
+
+/**
+ * Restore payroll parameters
+ *
+ * Restores a voided (not reversed) payroll record.
+ * Cannot restore reversed payrolls as they have financial transactions.
+ */
+export interface RestorePayrollParams {
+  /** Organization ID for multi-tenant isolation */
+  organizationId: ObjectIdLike;
+  /** Payroll record ID to restore */
+  payrollRecordId: ObjectIdLike;
+  /** Reason for restoration */
+  reason?: string;
+  /** Operation context */
+  context?: OperationContext;
+}
+
+/** Result of voiding a payroll */
+export interface VoidPayrollResult {
+  /** The voided payroll record */
+  payrollRecord: PayrollRecordDocument;
+  /** Whether the transaction was also voided */
+  transactionVoided: boolean;
+  /** Number of tax withholdings voided */
+  taxWithholdingsVoided: number;
+}
+
+/** Result of reversing a payroll */
+export interface ReversePayrollResult {
+  /** The reversed payroll record */
+  payrollRecord: PayrollRecordDocument;
+  /** The reversal transaction (if createReversalTransaction was true) */
+  reversalTransaction?: AnyDocument;
+  /** Number of tax withholdings cancelled */
+  taxWithholdingsCancelled: number;
+}
+
+/** Result of restoring a payroll */
+export interface RestorePayrollResult {
+  /** The restored payroll record */
+  payrollRecord: PayrollRecordDocument;
+}
+
+// ============================================================================
 // Result Types
 // ============================================================================
 
@@ -1073,12 +1283,6 @@ export interface PayrollInstance<
   updateEmployment(params: UpdateEmploymentParams): Promise<TEmployee>;
   terminate(params: TerminateEmployeeParams): Promise<TEmployee>;
   reHire(params: ReHireEmployeeParams): Promise<TEmployee>;
-  listEmployees(params: ListEmployeesParams): Promise<{
-    docs: TEmployee[];
-    totalDocs: number;
-    page: number;
-    limit: number;
-  }>;
 
   // ========================================
   // Compensation Management
@@ -1104,6 +1308,33 @@ export interface PayrollInstance<
   payrollHistory(params: PayrollHistoryParams): Promise<TPayrollRecord[]>;
   payrollSummary(params: PayrollSummaryParams): Promise<PayrollSummaryResult>;
   exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]>;
+
+  // ========================================
+  // Void / Reversal (v2.4.0+)
+  // ========================================
+
+  /**
+   * Void a payroll record (before payment)
+   *
+   * Use for: pending, processing, or failed payrolls
+   * Creates audit trail but no reversal transaction
+   */
+  voidPayroll(params: VoidPayrollParams): Promise<VoidPayrollResult>;
+
+  /**
+   * Reverse a paid payroll
+   *
+   * Creates a reversal (negative) transaction to offset the original
+   * Required for compliance: maintains full audit trail
+   */
+  reversePayroll(params: ReversePayrollParams): Promise<ReversePayrollResult>;
+
+  /**
+   * Restore a voided payroll
+   *
+   * Only works for voided payrolls (not reversed)
+   */
+  restorePayroll(params: RestorePayrollParams): Promise<RestorePayrollResult>;
 
   /** Extended properties from plugins */
   [key: string]: unknown;
@@ -1212,7 +1443,8 @@ export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'EMPLOYEE_TERMINATED'
   | 'ALREADY_PROCESSED'
-  | 'NOT_ELIGIBLE';
+  | 'NOT_ELIGIBLE'
+  | 'SECURITY_ERROR';
 
 /** HTTP error with status code */
 export interface HttpError extends Error {
@@ -1423,7 +1655,7 @@ export type TaxType =
   | 'other';
 
 /** Tax withholding status */
-export type TaxStatus = 'pending' | 'submitted' | 'paid';
+export type TaxStatus = 'pending' | 'submitted' | 'paid' | 'cancelled';
 
 /** Tax withholding document */
 export interface TaxWithholdingDocument extends Document {
@@ -1452,6 +1684,12 @@ export interface TaxWithholdingDocument extends Document {
 
   notes?: string;
   metadata?: Record<string, unknown>;
+
+  // Void fields (v2.4.0+)
+  voidedAt?: Date;
+  voidedBy?: ObjectId;
+  voidReason?: string;
+  voidMetadata?: Record<string, unknown>;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -1506,4 +1744,44 @@ export interface MarkTaxPaidParams {
   paidAt?: Date;
   notes?: string;
   context?: OperationContext;
+}
+
+// ============================================================================
+// Pagination Types (Mongokit Integration)
+// ============================================================================
+
+/** Offset-based pagination result (re-exported from mongokit) */
+export type {
+  OffsetPaginationResult,
+  KeysetPaginationResult,
+} from '@classytic/mongokit';
+
+// ============================================================================
+// Repository Types (Mongokit Integration)
+// ============================================================================
+
+/** Repository instance from @classytic/mongokit */
+export type { Repository } from '@classytic/mongokit';
+
+/** Repository plugin context for multi-tenancy */
+export interface RepositoryPluginContext {
+  organizationId?: ObjectId;
+  userId?: ObjectId;
+}
+
+/** Repository instances used internally by Payroll */
+export interface PayrollRepositories<
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTransaction extends AnyDocument = AnyDocument,
+> {
+  /** Employee repository */
+  employee: import('@classytic/mongokit').Repository<TEmployee>;
+  /** Payroll record repository */
+  payrollRecord: import('@classytic/mongokit').Repository<TPayrollRecord>;
+  /** Leave request repository (optional) */
+  leaveRequest?: import('@classytic/mongokit').Repository<TLeaveRequest>;
+  /** Transaction repository (optional) */
+  transaction?: import('@classytic/mongokit').Repository<TTransaction>;
 }

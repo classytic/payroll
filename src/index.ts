@@ -113,7 +113,6 @@ export type {
   UpdateEmploymentParams,
   TerminateEmployeeParams,
   ReHireEmployeeParams,
-  ListEmployeesParams,
   UpdateSalaryParams,
   AddAllowanceParams,
   RemoveAllowanceParams,
@@ -125,6 +124,14 @@ export type {
   PayrollHistoryParams,
   PayrollSummaryParams,
   ExportPayrollParams,
+
+  // Void / Reversal types (v2.4.0+)
+  VoidPayrollParams,
+  ReversePayrollParams,
+  RestorePayrollParams,
+  VoidPayrollResult,
+  ReversePayrollResult,
+  RestorePayrollResult,
 
   // Result types
   ProcessSalaryResult,
@@ -204,6 +211,51 @@ export {
 } from './core/webhooks.js';
 
 // ============================================================================
+// Repository Plugins (Mongokit Integration - v2.4.0+)
+// ============================================================================
+
+export {
+  multiTenantPlugin,
+} from './core/repository-plugins.js';
+
+// ============================================================================
+// Timeline Audit Integration (@classytic/mongoose-timeline-audit)
+// ============================================================================
+
+export {
+  PAYROLL_EVENTS,
+  type PayrollTimelineEvent,
+  EMPLOYEE_TIMELINE_CONFIG,
+  PAYROLL_RECORD_TIMELINE_CONFIG,
+  LEAVE_REQUEST_TIMELINE_CONFIG,
+  buildTimelineMetadata,
+  buildRequestContext,
+} from './core/timeline-audit.js';
+
+// ============================================================================
+// State Machines (v2.4.0+)
+// ============================================================================
+
+export {
+  // State machine utility
+  StateMachine,
+  createStateMachine,
+  type StateMachineConfig,
+  type StateTransition,
+  type TransitionResult,
+  // Status-specific state machines
+  PayrollStatusMachine,
+  TaxStatusMachine,
+  LeaveRequestStatusMachine,
+  EmployeeStatusMachine,
+  // State types
+  type PayrollStatusState,
+  type TaxStatusState,
+  type LeaveRequestStatusState,
+  type EmployeeStatusState,
+} from './core/payroll-states.js';
+
+// ============================================================================
 // Enums / Constants (common)
 // ============================================================================
 
@@ -223,6 +275,10 @@ export {
   isValidLeaveRequestStatus,
   isPendingLeaveStatus,
   isApprovedLeaveStatus,
+  // Payroll status helpers (v2.4.0+)
+  isVoidablePayrollStatus,
+  requiresReversalPayrollStatus,
+  isVoidedOrReversedStatus,
 } from './enums.js';
 
 // ============================================================================
@@ -240,6 +296,9 @@ export {
 // ============================================================================
 
 export {
+  // Schema options (multi-tenant / multi-branch flexibility)
+  type PayrollSchemaOptions,
+  // Sub-schemas
   allowanceSchema,
   deductionSchema,
   compensationSchema,
@@ -247,18 +306,21 @@ export {
   bankDetailsSchema,
   employmentHistorySchema,
   payrollStatsSchema,
-  employmentFields,
+  // Configurable field creators (for multi-branch/tenant setups)
+  createEmploymentFields,
+  createPayrollRecordFields,
+  // Index helpers
   applyEmployeeIndexes,
   applyPayrollRecordIndexes,
+  // Schema factory functions
   createEmployeeSchema,
   createPayrollRecordSchema,
-  // Leave schemas
+  // Leave schemas (utilities only - model exports are below)
   leaveBalanceSchema,
   leaveBalanceFields,
-  leaveRequestFields,
   leaveRequestIndexes,
   applyLeaveRequestIndexes,
-  createLeaveRequestSchema,
+  getLeaveRequestFields,
 } from './schemas/index.js';
 
 // ============================================================================
@@ -300,6 +362,7 @@ export {
   EmployeeTerminatedError,
   AlreadyProcessedError,
   ValidationError,
+  SecurityError,
   createError,
   isPayrollError,
   extractErrorInfo,
@@ -549,6 +612,7 @@ export {
   isValidTaxStatus,
   isPendingTaxStatus,
   isPaidTaxStatus,
+  isCancelledTaxStatus,
 } from './enums.js';
 
 export {
@@ -558,10 +622,9 @@ export {
 } from './models/index.js';
 
 export {
-  taxWithholdingFields,
   taxWithholdingIndexes,
   applyTaxWithholdingIndexes,
-  createTaxWithholdingSchema,
+  getTaxWithholdingFields,
 } from './schemas/index.js';
 
 // ============================================================================

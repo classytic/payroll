@@ -288,6 +288,11 @@ export class Container<
 
   /**
    * Create operation context with defaults
+   *
+   * In single-tenant mode with autoInject enabled (default), automatically
+   * injects the configured organizationId into the context.
+   *
+   * @throws Error if autoInject is enabled but no organizationId is configured
    */
   createOperationContext(
     overrides?: Partial<{
@@ -307,8 +312,21 @@ export class Container<
     const context: Record<string, unknown> = {};
 
     // Auto-inject organizationId in single-tenant mode
-    if (this._singleTenant?.autoInject && !overrides?.organizationId) {
-      context.organizationId = this.getOrganizationId();
+    // FIX: Check if single-tenant mode is enabled (config exists)
+    const isSingleTenant = !!this._singleTenant;
+    const autoInjectEnabled = isSingleTenant && this._singleTenant?.autoInject !== false;
+
+    if (autoInjectEnabled && !overrides?.organizationId) {
+      const orgId = this.getOrganizationId();
+      if (orgId) {
+        context.organizationId = orgId;
+      } else {
+        // Single-tenant mode with autoInject but no organizationId configured
+        throw new Error(
+          'Single-tenant mode with autoInject enabled requires organizationId in configuration. ' +
+          'Configure it via forSingleTenant({ organizationId: YOUR_ORG_ID }) or provide it explicitly.'
+        );
+      }
     }
 
     return { ...context, ...overrides };

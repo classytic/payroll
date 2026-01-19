@@ -3,6 +3,7 @@
  * Sends HTTP notifications when payroll events occur
  */
 
+import crypto from 'crypto';
 import type { PayrollEventType, PayrollEventMap } from './events.js';
 
 export interface WebhookConfig {
@@ -97,25 +98,31 @@ export class WebhookManager {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), webhook.timeout || 30000);
 
+        const timestamp = Math.floor(Date.now() / 1000);
+        const deliveredAt = new Date().toISOString();
+
+        const requestBody = {
+          event,
+          payload,
+          deliveredAt,
+        };
+
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'X-Payroll-Event': event,
           'X-Payroll-Delivery': deliveryId,
+          'X-Payroll-Timestamp': timestamp.toString(),
           ...webhook.headers,
         };
 
         if (webhook.secret) {
-          headers['X-Payroll-Signature'] = this.generateSignature(payload, webhook.secret);
+          headers['X-Payroll-Signature'] = this.generateSignature(requestBody, webhook.secret, timestamp);
         }
 
         const response = await fetch(webhook.url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            event,
-            payload,
-            deliveredAt: new Date().toISOString(),
-          }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal,
         });
 
@@ -132,9 +139,18 @@ export class WebhookManager {
           return delivery;
         }
 
-        // Retry on 5xx errors
-        if (response.status >= 500 && attempt < maxRetries) {
-          await this.sleep(Math.pow(2, attempt) * 1000); // Exponential backoff
+        // Retry on transient errors: 5xx, 429 (rate limit), 408 (timeout)
+        const shouldRetry = (
+          response.status >= 500 ||
+          response.status === 429 ||
+          response.status === 408
+        );
+
+        if (shouldRetry && attempt < maxRetries) {
+          // Exponential backoff with jitter
+          const backoff = Math.pow(2, attempt) * 1000;
+          const jitter = Math.random() * 1000;
+          await this.sleep(backoff + jitter);
           continue;
         }
 
@@ -158,12 +174,59 @@ export class WebhookManager {
   }
 
   /**
-   * Generate HMAC signature for webhook
+   * Generate HMAC-SHA256 signature for webhook (Stripe-style)
+   *
+   * Format: t=<timestamp>,v1=<hmac_signature>
+   *
+   * The signed payload is: timestamp.JSON(requestBody)
+   * where requestBody = { event, payload, deliveredAt }
+   *
+   * Consumers should verify:
+   * 1. Timestamp is within tolerance (e.g., 5 minutes)
+   * 2. HMAC signature matches
+   *
+   * @example Verify signature (consumer side)
+   * ```typescript
+   * import crypto from 'crypto';
+   *
+   * const signature = req.headers['x-payroll-signature'];
+   * const timestamp = req.headers['x-payroll-timestamp'];
+   * const requestBody = req.body; // { event, payload, deliveredAt }
+   *
+   * // Check timestamp (replay protection)
+   * const now = Math.floor(Date.now() / 1000);
+   * if (Math.abs(now - parseInt(timestamp)) > 300) {
+   *   throw new Error('Signature expired');
+   * }
+   *
+   * // Verify signature
+   * const signedPayload = `${timestamp}.${JSON.stringify(requestBody)}`;
+   * const expectedSignature = crypto
+   *   .createHmac('sha256', secret)
+   *   .update(signedPayload)
+   *   .digest('hex');
+   *
+   * const parts = signature.split(',');
+   * const providedSignature = parts.find(p => p.startsWith('v1='))?.split('=')[1];
+   *
+   * if (providedSignature !== expectedSignature) {
+   *   throw new Error('Invalid signature');
+   * }
+   * ```
    */
-  private generateSignature(payload: unknown, secret: string): string {
-    // Simple hash - in production, use crypto.createHmac
-    const data = JSON.stringify(payload);
-    return Buffer.from(`${secret}:${data}`).toString('base64');
+  private generateSignature(requestBody: unknown, secret: string, timestamp: number): string {
+    const data = JSON.stringify(requestBody);
+
+    // Signed payload: timestamp.data
+    const signedPayload = `${timestamp}.${data}`;
+
+    // Generate HMAC-SHA256 signature
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(signedPayload);
+    const signature = hmac.digest('hex');
+
+    // Stripe-style format: t=timestamp,v1=signature
+    return `t=${timestamp},v1=${signature}`;
   }
 
   /**

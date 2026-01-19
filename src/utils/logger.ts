@@ -56,10 +56,23 @@ let loggingEnabled = true;
 // ============================================================================
 
 /**
- * Get the current logger instance
+ * Get the current logger instance (respects loggingEnabled flag)
  */
 export function getLogger(): Logger {
-  return currentLogger;
+  return {
+    info: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) currentLogger.info(message, meta);
+    },
+    error: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) currentLogger.error(message, meta);
+    },
+    warn: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) currentLogger.warn(message, meta);
+    },
+    debug: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) currentLogger.debug(message, meta);
+    },
+  };
 }
 
 /**
@@ -77,19 +90,23 @@ export function resetLogger(): void {
 }
 
 /**
- * Create a child logger with prefix
+ * Create a child logger with prefix (respects loggingEnabled flag)
  */
 export function createChildLogger(prefix: string): Logger {
   const parent = currentLogger;
   return {
-    info: (message: string, meta?: Record<string, unknown>) =>
-      parent.info(`[${prefix}] ${message}`, meta),
-    error: (message: string, meta?: Record<string, unknown>) =>
-      parent.error(`[${prefix}] ${message}`, meta),
-    warn: (message: string, meta?: Record<string, unknown>) =>
-      parent.warn(`[${prefix}] ${message}`, meta),
-    debug: (message: string, meta?: Record<string, unknown>) =>
-      parent.debug(`[${prefix}] ${message}`, meta),
+    info: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) parent.info(`[${prefix}] ${message}`, meta);
+    },
+    error: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) parent.error(`[${prefix}] ${message}`, meta);
+    },
+    warn: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) parent.warn(`[${prefix}] ${message}`, meta);
+    },
+    debug: (message: string, meta?: Record<string, unknown>) => {
+      if (loggingEnabled) parent.debug(`[${prefix}] ${message}`, meta);
+    },
   };
 }
 

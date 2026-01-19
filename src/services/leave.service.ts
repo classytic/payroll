@@ -80,8 +80,13 @@ export interface RequestLeaveParams {
   organizationId?: ObjectIdLike;
   /** Employee requesting leave */
   employeeId: ObjectIdLike;
-  /** User ID of the employee */
-  userId: ObjectIdLike;
+  /**
+   * User ID of the employee (optional for guest employees)
+   *
+   * If not provided, the employee's userId from their record will be used.
+   * Guest employees (those without a userId) can still request leave.
+   */
+  userId?: ObjectIdLike;
   /** Leave request details (type, dates, reason, etc.) */
   request: RequestLeaveInput;
   /** Holiday dates to exclude from working days calculation */
@@ -94,6 +99,8 @@ export interface RequestLeaveParams {
  * Parameters for reviewing (approving/rejecting) leave requests
  */
 export interface ReviewLeaveParams {
+  /** Organization ID for multi-tenant isolation (required in multi-tenant mode) */
+  organizationId?: ObjectIdLike;
   /** Leave request ID to review */
   requestId: ObjectIdLike;
   /** User ID of the reviewer (manager/admin) */
@@ -110,6 +117,8 @@ export interface ReviewLeaveParams {
  * Parameters for cancelling leave requests
  */
 export interface CancelLeaveParams {
+  /** Organization ID for multi-tenant isolation (required in multi-tenant mode) */
+  organizationId?: ObjectIdLike;
   /** Leave request ID to cancel */
   requestId: ObjectIdLike;
   /** Mongoose session for transaction support */
@@ -300,7 +309,6 @@ export class LeaveService {
 
     const orgId = this.resolveOrganizationId(organizationId);
     const empId = toObjectId(employeeId);
-    const uId = toObjectId(userId);
 
     // Calculate working days
     const days = this.calculateDays(request.startDate, request.endDate, {
@@ -313,27 +321,29 @@ export class LeaveService {
       throw new ValidationError('Leave request must include at least one working day');
     }
 
-    // Find employee
-    const employee = await this.findEmployee(empId, session);
+    // Find employee (SECURITY: org-scoped query prevents cross-tenant access)
+    const employee = await this.findEmployee(empId, orgId, session);
     if (!employee) {
       throw new ValidationError(`Employee not found: ${employeeId}`);
     }
 
-    // Validate organization match when both organizationId values exist
-    // This prevents data inconsistency in both single-tenant and multi-tenant modes
-    if (orgId) {
-      const empOrgId = (employee as unknown as Record<string, unknown>).organizationId as mongoose.Types.ObjectId;
-      if (empOrgId && !empOrgId.equals(orgId)) {
-        throw new ValidationError(
-          `Organization mismatch: employee belongs to ${empOrgId.toString()}, not ${orgId.toString()}`
-        );
-      }
+    // Get userId - use provided or from employee record (supports guest employees)
+    const empUserId = (employee as unknown as Record<string, unknown>).userId as mongoose.Types.ObjectId | undefined;
+    const uId = userId ? toObjectId(userId) : empUserId;
+
+    // Validate userId belongs to this employee (prevents requesting leave on behalf of others)
+    // Skip validation if both are undefined (guest employee)
+    if (userId && empUserId && !empUserId.equals(toObjectId(userId))) {
+      throw new ValidationError(
+        'User ID does not match employee record. Cannot request leave on behalf of another employee.'
+      );
     }
 
-    // Check for overlapping requests
+    // Check for overlapping requests (SECURITY: org-scoped)
     if (this.config.checkOverlap) {
       const { hasOverlap, overlappingRequests } = await this.checkOverlap({
         employeeId: empId,
+        organizationId: orgId,
         startDate: request.startDate,
         endDate: request.endDate,
         excludeRequestId: undefined,
@@ -434,13 +444,19 @@ export class LeaveService {
    * });
    */
   async reviewLeave(params: ReviewLeaveParams): Promise<ReviewResult> {
-    const { requestId, reviewerId, action, notes, session } = params;
+    const { organizationId, requestId, reviewerId, action, notes, session } = params;
 
+    const orgId = this.resolveOrganizationId(organizationId);
     const reqId = toObjectId(requestId);
     const revId = toObjectId(reviewerId);
 
-    // Find leave request
-    let query = this.LeaveRequestModel.findById(reqId);
+    // Find leave request with organizationId scoping for multi-tenant isolation
+    const queryFilter: Record<string, unknown> = { _id: reqId };
+    if (orgId) {
+      queryFilter.organizationId = orgId;
+    }
+
+    let query = this.LeaveRequestModel.findOne(queryFilter);
     if (session) query = query.session(session);
 
     const leaveRequest = await query.exec();
@@ -452,8 +468,8 @@ export class LeaveService {
       throw new ValidationError(`Cannot ${action} a ${leaveRequest.status} request`);
     }
 
-    // Find employee
-    const employee = await this.findEmployee(leaveRequest.employeeId, session);
+    // Find employee (SECURITY: org-scoped query)
+    const employee = await this.findEmployee(leaveRequest.employeeId, orgId, session);
     if (!employee) {
       throw new ValidationError(`Employee not found: ${leaveRequest.employeeId}`);
     }
@@ -547,12 +563,18 @@ export class LeaveService {
   async cancelLeave(
     params: CancelLeaveParams & { allowCancelApproved?: boolean }
   ): Promise<ReviewResult> {
-    const { requestId, session, allowCancelApproved = false } = params;
+    const { organizationId, requestId, session, allowCancelApproved = false } = params;
 
+    const orgId = this.resolveOrganizationId(organizationId);
     const reqId = toObjectId(requestId);
 
-    // Find leave request
-    let query = this.LeaveRequestModel.findById(reqId);
+    // Find leave request with organizationId scoping for multi-tenant isolation
+    const queryFilter: Record<string, unknown> = { _id: reqId };
+    if (orgId) {
+      queryFilter.organizationId = orgId;
+    }
+
+    let query = this.LeaveRequestModel.findOne(queryFilter);
     if (session) query = query.session(session);
 
     const leaveRequest = await query.exec();
@@ -577,8 +599,8 @@ export class LeaveService {
       );
     }
 
-    // Find employee
-    const employee = await this.findEmployee(leaveRequest.employeeId, session);
+    // Find employee (SECURITY: org-scoped query)
+    const employee = await this.findEmployee(leaveRequest.employeeId, orgId, session);
     if (!employee) {
       throw new ValidationError(`Employee not found: ${leaveRequest.employeeId}`);
     }
@@ -628,16 +650,20 @@ export class LeaveService {
    */
   async checkOverlap(params: {
     employeeId: ObjectIdLike;
+    organizationId?: ObjectIdLike;
     startDate: Date;
     endDate: Date;
     excludeRequestId?: ObjectIdLike;
     session?: ClientSession;
   }): Promise<OverlapCheckResult> {
-    const { employeeId, startDate, endDate, excludeRequestId, session } = params;
+    const { employeeId, organizationId, startDate, endDate, excludeRequestId, session } = params;
 
+    // SECURITY: Resolve and enforce organizationId (required in multi-tenant mode)
+    const orgId = this.resolveOrganizationId(organizationId);
     const empId = toObjectId(employeeId);
 
     // Find overlapping pending or approved requests
+    // SECURITY: Include organizationId in query to prevent cross-tenant data leaks
     const query: Record<string, unknown> = {
       employeeId: empId,
       status: { $in: ['pending', 'approved'] },
@@ -646,6 +672,11 @@ export class LeaveService {
         { startDate: { $lte: endDate }, endDate: { $gte: startDate } },
       ],
     };
+
+    // SECURITY: Filter by organization in multi-tenant mode
+    if (orgId) {
+      query.organizationId = orgId;
+    }
 
     if (excludeRequestId) {
       query._id = { $ne: toObjectId(excludeRequestId) };
@@ -780,15 +811,46 @@ export class LeaveService {
   }
 
   /**
-   * Find employee by ID
+   * Find employee by ID with organization scoping
+   *
+   * SECURITY: In multi-tenant mode, this enforces organizationId filtering
+   * to prevent cross-tenant data access. In single-tenant mode, employees
+   * may not have organizationId set, so we validate after lookup.
+   *
+   * @param employeeId - Employee ObjectId
+   * @param organizationId - Organization ID (required in multi-tenant mode)
+   * @param session - Optional transaction session
    */
   private async findEmployee(
     employeeId: mongoose.Types.ObjectId,
+    organizationId?: mongoose.Types.ObjectId,
     session?: ClientSession
   ): Promise<EmployeeDocument | null> {
-    let query = this.EmployeeModel.findById(employeeId);
+    const filter: Record<string, unknown> = { _id: employeeId };
+
+    // SECURITY: In multi-tenant mode, always filter by organizationId at query level
+    // In single-tenant mode, allow lookup without org filter (employee may not have org set)
+    if (!this.config.singleTenant && organizationId) {
+      filter.organizationId = organizationId;
+    }
+
+    let query = this.EmployeeModel.findOne(filter);
     if (session) query = query.session(session);
-    return query.exec();
+
+    const employee = await query.exec();
+
+    // SECURITY: In single-tenant mode with org provided, validate match if employee has org
+    if (this.config.singleTenant && employee && organizationId) {
+      const empOrgId = (employee as unknown as Record<string, unknown>).organizationId as mongoose.Types.ObjectId | undefined;
+      if (empOrgId && !empOrgId.equals(organizationId)) {
+        // Org mismatch - throw clear error for debugging (not a security leak in single-tenant)
+        throw new ValidationError(
+          `Organization mismatch: employee belongs to ${empOrgId.toString()}, not ${organizationId.toString()}`
+        );
+      }
+    }
+
+    return employee;
   }
 
   /**

@@ -112,7 +112,7 @@ export async function batchGetAttendance(
     year: number;
     expectedDays: number;
   }
-): Promise<Map<string, AttendanceInput>> {
+): Promise<Map<string, AttendanceInput & { absentDays: number; overtimeDays: number }>> {
   const records = await AttendanceModel.find({
     organizationId: params.organizationId,
     targetId: { $in: params.employeeIds },
@@ -121,17 +121,21 @@ export async function batchGetAttendance(
     month: params.month,
   }).lean<ClockInAttendance[]>();
 
-  const map = new Map<string, AttendanceInput>();
+  const map = new Map<string, AttendanceInput & { absentDays: number; overtimeDays: number }>();
 
   for (const record of records) {
     const fullDays = record.fullDaysCount || 0;
     const halfDays = (record.halfDaysCount || 0) * 0.5;
     const paidLeave = record.paidLeaveDaysCount || 0;
     const actualDays = fullDays + halfDays + paidLeave;
+    const absentDays = Math.max(0, params.expectedDays - actualDays);
+    const overtimeDays = record.overtimeDaysCount || 0;
 
     map.set(String(record.targetId), {
       expectedDays: params.expectedDays,
       actualDays,
+      absentDays,
+      overtimeDays,
     });
   }
 

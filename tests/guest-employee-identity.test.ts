@@ -592,16 +592,13 @@ describe('Mixed Guest and User-Linked Employees', () => {
       baseSalary: 3200,
     });
 
-    // Verify counts
-    const result = await payroll.listEmployees({
-      organizationId: ORG_ID,
-    });
+    // Verify counts using Model.find() directly (users should use Repository for CRUD)
+    const docs = await Employee.find({ organizationId: ORG_ID });
 
-    expect(result.docs.length).toBe(4);
-    expect(result.totalDocs).toBe(4);
+    expect(docs.length).toBe(4);
 
-    const guestCount = result.docs.filter(e => !e.userId).length;
-    const userLinkedCount = result.docs.filter(e => e.userId).length;
+    const guestCount = docs.filter((e: any) => !e.userId).length;
+    const userLinkedCount = docs.filter((e: any) => e.userId).length;
 
     expect(guestCount).toBe(2);
     expect(userLinkedCount).toBe(2);

@@ -1,413 +1,95 @@
-# Integration Guide
+# Attendance Integration
 
-## Attendance Integration (Optional)
+Optional integration with attendance systems for payroll deductions.
 
-The `@classytic/payroll` library can optionally integrate with an Attendance system for automatic payroll deductions based on employee work days.
-
----
-
-## Integration Contract
-
-### Required Fields in AttendanceModel
-
-If you want to enable attendance-based payroll calculations, your `AttendanceModel` **MUST** have these fields:
+## Required Attendance Fields
 
 ```typescript
 interface AttendanceRecord {
-  // Multi-tenancy
-  organizationId: ObjectId;    // Organization ID (required)
-
-  // Polymorphic target reference
-  targetModel: string;         // Model name, must include 'Employee'
-  targetId: ObjectId;          // Reference to Employee._id
-
-  // Time period (one document per month)
-  year: number;                // Year (e.g., 2024)
-  month: number;               // Month (1-12)
-
-  // Payroll calculation (MOST IMPORTANT!)
-  totalWorkDays: number;       // Total days worked (including half days)
-                               // Formula: fullDays + (halfDays × 0.5) + paidLeaveDays
+  organizationId: ObjectId;
+  targetModel: string; // Must include 'Employee'
+  targetId: ObjectId; // Employee._id
+  year: number;
+  month: number;
+  totalWorkDays: number; // fullDays + (halfDays × 0.5) + paidLeaveDays
 }
 ```
 
----
-
-## Setup with @classytic/payroll
-
-### Installation
-
-```bash
-npm install @classytic/payroll mongoose
-```
-
-### Initialize with Attendance
+## Setup
 
 ```typescript
-import { createPayrollInstance, createPayrollRecordSchema } from '@classytic/payroll';
-import mongoose from 'mongoose';
+import { createPayrollInstance } from '@classytic/payroll';
 
-// Your models
-const EmployeeModel = mongoose.model('Employee', employeeSchema);
-const PayrollRecordModel = mongoose.model('PayrollRecord', createPayrollRecordSchema());
-const TransactionModel = mongoose.model('Transaction', transactionSchema);
-const AttendanceModel = mongoose.model('Attendance', attendanceSchema);
-
-// Initialize with attendance integration
 const payroll = createPayrollInstance()
   .withModels({
     EmployeeModel,
     PayrollRecordModel,
     TransactionModel,
-    AttendanceModel,  // ✅ Enable integration
+    AttendanceModel, // Enable attendance integration
   })
   .withConfig({
-    payroll: {
-      attendanceIntegration: true,
-    },
+    payroll: { attendanceIntegration: true },
   })
   .build();
 ```
 
----
+## Usage
 
-## How It Works
-
-### Attendance Resolution Priority
-
-When processing payroll, attendance is resolved in this order:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  processSalary({ employeeId, month, year, attendance? })        │
-│                                                                 │
-│  1. If attendance is passed → use it directly (PRIMARY)         │
-│  2. If not passed + AttendanceModel exists → auto-fetch (FALLBACK) │
-│  3. If neither → assume full attendance (no deduction)          │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-| Approach | When to Use |
-|----------|-------------|
-| Explicit (primary) | Production apps with custom attendance logic, multiple attendance sources, complex rules |
-| Auto-fetch (fallback) | Quick prototyping, simple setups where ClockIn schema matches exactly |
-
-### Recommended: Explicit Attendance (Full Control)
-
-Use the `getAttendance()` helper for production apps:
+### Explicit Attendance (Recommended)
 
 ```typescript
 import { getAttendance } from '@classytic/payroll';
 
-// Fetch attendance explicitly
 const attendance = await getAttendance(AttendanceModel, {
-  organizationId,
   employeeId,
-  month: 3,
+  organizationId,
   year: 2024,
-  expectedDays: 21, // You control this!
+  month: 1,
 });
 
-// Pass to processSalary
 await payroll.processSalary({
-  employeeId,
   organizationId,
-  month: 3,
-  year: 2024,
-  attendance, // Explicit - full control
+  employeeId,
+  period: { month: 1, year: 2024 },
+  attendance, // Explicit attendance
 });
 ```
 
-### Auto-Fetch (Simple Setup)
-
-For simple setups, just enable `attendanceIntegration`:
+### Auto-Fetch (Fallback)
 
 ```typescript
-const payroll = createPayrollInstance()
-  .withModels({
-    EmployeeModel,
-    PayrollRecordModel,
-    TransactionModel,
-    AttendanceModel, // ✅ Provide AttendanceModel
-  })
-  .withConfig({
-    payroll: {
-      attendanceIntegration: true, // ✅ Enable auto-fetch
-    },
-  })
-  .build();
-
-// Auto-fetches attendance from DB
+// If AttendanceModel is provided and no attendance is passed,
+// it will auto-fetch from the database
 await payroll.processSalary({
-  employeeId,
   organizationId,
-  month: 3,
-  year: 2024,
-  // attendance NOT passed - auto-fetched from AttendanceModel!
+  employeeId,
+  period: { month: 1, year: 2024 },
+  // attendance auto-fetched
 });
 ```
 
-### How Deductions Are Calculated
+## Calculation
 
-When attendance is available:
-
-1. **Reads `totalWorkDays`** from the attendance document
-2. **Derives expected days** from employee's work schedule
-3. **Calculates absent days**: `expectedWorkingDays - totalWorkDays`
-4. **Applies deduction**: `absentDays × dailyRate`
-
-### Example
-
-```typescript
-// Employee with monthly salary of 50,000
-// Pay period: March 2025 (expected working days: 22)
-// Attendance record shows: totalWorkDays = 18.5 (18 full + 1 half day)
-
-// Automatic calculation:
-const absentDays = 22 - 18.5;     // 3.5 days
-const dailyRate = 50000 / 22;     // ~2,272.73
-const deduction = 3.5 * 2272.73;  // ~7,954.55
-
-// Final payroll breakdown:
-// Base: 50,000
-// Attendance Deduction: -7,954.55
-// Net: 42,045.45
+```
+Pro-rated salary = baseAmount × (actualWorkDays / expectedWorkDays)
 ```
 
----
+Example:
+- Base salary: $5000/month
+- Expected work days: 22
+- Actual work days: 20
+- Pro-rated salary: $5000 × (20/22) = $4545.45
 
-## Custom Attendance System
-
-If you're using your own attendance system, ensure your model includes:
-
-### Minimal Schema
-
-```typescript
-import mongoose from 'mongoose';
-
-const customAttendanceSchema = new mongoose.Schema({
-  organizationId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-  },
-  targetModel: {
-    type: String,
-    required: true,
-    enum: ['Employee', 'Membership', 'User'],  // Must include 'Employee'
-  },
-  targetId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'targetModel',
-  },
-  year: {
-    type: Number,
-    required: true,
-  },
-  month: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 12,
-  },
-  totalWorkDays: {
-    type: Number,
-    required: true,
-    default: 0,
-    min: 0,
-  },
-
-  // Optional but recommended:
-  fullDaysCount: Number,
-  halfDaysCount: Number,
-  paidLeaveDaysCount: Number,
-  overtimeDaysCount: Number,
-});
-
-// IMPORTANT: Unique index for efficient queries
-customAttendanceSchema.index(
-  { organizationId: 1, targetModel: 1, targetId: 1, year: 1, month: 1 },
-  { unique: true }
-);
-
-export const CustomAttendance = mongoose.model('CustomAttendance', customAttendanceSchema);
-```
-
-**Note:** `expectedWorkingDays` comes from payroll's work schedule + holidays. When you pass manual attendance into `processSalary`, ensure `expectedDays` is the working‑days count (not calendar days).
-
----
-
-## Disabling Attendance Integration
-
-If you don't have an attendance system or don't want automatic deductions:
+## Integration with @classytic/clockin
 
 ```typescript
-// Option 1: Don't provide AttendanceModel
-const payroll = createPayrollInstance()
-  .withModels({
-    EmployeeModel,
-    PayrollRecordModel,
-    TransactionModel,
-    // AttendanceModel not provided
-  })
-  .build();
+import { createAttendanceSchema } from '@classytic/clockin/schemas';
 
-// Option 2: Disable via config
+const Attendance = model('Attendance', createAttendanceSchema());
+
+// Use with payroll
 const payroll = createPayrollInstance()
-  .withModels({
-    EmployeeModel,
-    PayrollRecordModel,
-    TransactionModel,
-    AttendanceModel,
-  })
-  .withConfig({
-    payroll: {
-      attendanceIntegration: false,  // Disabled
-    },
-  })
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel, Attendance })
+  .withConfig({ payroll: { attendanceIntegration: true } })
   .build();
 ```
-
-**Result:** Payroll will be calculated based on full base salary without attendance deductions.
-
----
-
-## totalWorkDays Calculation Logic
-
-The `totalWorkDays` field should use this formula:
-
-```
-totalWorkDays = fullDays + (halfDays × 0.5) + paidLeaveDays
-```
-
-### Examples
-
-| Full Days | Half Days | Paid Leave | Total Work Days |
-|-----------|-----------|------------|-----------------|
-| 20        | 0         | 0          | 20.0            |
-| 18        | 2         | 0          | 19.0            |
-| 15        | 4         | 2          | 19.0            |
-| 22        | 1         | 1          | 23.5            |
-
-**Note:** Unpaid leave and overtime are **NOT** included in `totalWorkDays`.
-
----
-
-## Query Pattern
-
-The payroll library queries attendance like this:
-
-```typescript
-const attendance = await AttendanceModel.findOne({
-  organizationId: organizationId,
-  targetId: employeeId,
-  targetModel: 'Employee',
-  year: 2025,
-  month: 3,
-});
-
-const workedDays = attendance?.totalWorkDays || 0;
-```
-
-**Make sure your indexes support this query pattern!**
-
----
-
-## Compatibility Checklist
-
-Before enabling attendance integration, verify:
-
-- [ ] Model has `organizationId` field (ObjectId)
-- [ ] Model has `targetModel` field (String, includes 'Employee')
-- [ ] Model has `targetId` field (ObjectId)
-- [ ] Model has `year` field (Number)
-- [ ] Model has `month` field (Number, 1-12)
-- [ ] Model has `totalWorkDays` field (Number, decimal)
-- [ ] Compound index on `(organizationId, targetModel, targetId, year, month)`
-- [ ] `totalWorkDays` is calculated correctly before payroll runs
-
----
-
-## Framework Integration
-
-### Fastify Plugin
-
-```typescript
-import fastify from 'fastify';
-import { createPayrollInstance } from '@classytic/payroll';
-
-const app = fastify();
-
-app.register(async (instance) => {
-  const payroll = createPayrollInstance()
-    .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
-    .build();
-
-  instance.decorate('payroll', payroll);
-});
-
-// Use in routes
-app.post('/employees', async (req, reply) => {
-  const employee = await app.payroll.hire(req.body);
-  return employee;
-});
-```
-
-### Express Middleware
-
-```typescript
-import express from 'express';
-import { createPayrollInstance } from '@classytic/payroll';
-
-const app = express();
-
-const payroll = createPayrollInstance()
-  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
-  .build();
-
-app.use((req, res, next) => {
-  req.payroll = payroll;
-  next();
-});
-```
-
-### NestJS Provider
-
-```typescript
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Payroll, createPayrollInstance } from '@classytic/payroll';
-
-@Injectable()
-export class PayrollProvider implements OnModuleInit {
-  private payroll: Payroll;
-
-  constructor(
-    @InjectModel('Employee') private employeeModel,
-    @InjectModel('PayrollRecord') private payrollRecordModel,
-    @InjectModel('Transaction') private transactionModel,
-  ) {}
-
-  onModuleInit() {
-    this.payroll = createPayrollInstance()
-      .withModels({
-        EmployeeModel: this.employeeModel,
-        PayrollRecordModel: this.payrollRecordModel,
-        TransactionModel: this.transactionModel,
-      })
-      .build();
-  }
-
-  getPayroll() {
-    return this.payroll;
-  }
-}
-```
-
----
-
-## Related Documentation
-
-- [README.md](../README.md) - Main documentation
-- [DEVELOPMENT.md](./DEVELOPMENT.md) - Development guide
-- [NPM_GUIDE.md](../NPM_GUIDE.md) - Publishing workflow

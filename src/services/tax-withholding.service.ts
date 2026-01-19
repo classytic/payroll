@@ -14,6 +14,7 @@ import type {
   PayrollBreakdown,
   PayrollPeriod,
   AnyModel,
+  AnyDocument,
   OperationContext,
   GetPendingTaxParams,
   TaxSummaryParams,
@@ -21,6 +22,7 @@ import type {
   MarkTaxPaidParams,
 } from '../types.js';
 import type { EventBus } from '../core/events.js';
+import { TaxStatusMachine } from '../core/payroll-states.js';
 import { toObjectId } from '../utils/index.js';
 import { logger } from '../utils/logger.js';
 import { TAX_TYPE, TAX_STATUS } from '../enums.js';
@@ -79,7 +81,7 @@ export class TaxWithholdingService {
       transactionId,
       period,
       breakdown,
-      currency = 'BDT',
+      currency = 'USD',
       session,
       context,
     } = params;
@@ -240,7 +242,7 @@ export class TaxWithholdingService {
    */
   async markPaid(params: MarkTaxPaidParams): Promise<{
     withholdings: TaxWithholdingDocument[];
-    transaction?: any;
+    transaction?: AnyDocument;
   }> {
     const {
       organizationId,
@@ -278,7 +280,7 @@ export class TaxWithholdingService {
         tags: ['tax', 'government', 'withholding'],
         amount: totalAmount,
         grossAmount: totalAmount,
-        currency: withholdings[0].currency || 'BDT',
+        currency: withholdings[0].currency || 'USD',
         status: 'completed',
         date: paidAt,
         description: `Tax payment to government - ${referenceNumber || 'Multiple withholdings'}`,
@@ -341,23 +343,131 @@ export class TaxWithholdingService {
 
   /**
    * Get tax withholdings for a specific payroll record
+   *
+   * @param organizationId - Required for multi-tenant isolation
+   * @param payrollRecordId - The payroll record ID to find withholdings for
    */
-  async getByPayrollRecord(payrollRecordId: ObjectIdLike): Promise<TaxWithholdingDocument[]> {
-    return (this.TaxWithholdingModel as any)
-      .getByPayrollRecord(toObjectId(payrollRecordId))
-      .exec();
+  async getByPayrollRecord(
+    organizationId: ObjectIdLike,
+    payrollRecordId: ObjectIdLike
+  ): Promise<TaxWithholdingDocument[]> {
+    // Use direct query with organizationId enforcement for security
+    return this.TaxWithholdingModel.find({
+      organizationId: toObjectId(organizationId),
+      payrollRecordId: toObjectId(payrollRecordId),
+    }).exec();
+  }
+
+  /**
+   * Void/cancel tax withholdings for a payroll record
+   *
+   * Used when voiding or reversing a payroll to invalidate associated tax withholdings.
+   * Changes status to 'cancelled' and adds void metadata.
+   *
+   * @returns Number of withholdings voided
+   */
+  async voidByPayrollRecord(params: {
+    payrollRecordId: ObjectIdLike;
+    organizationId: ObjectIdLike;
+    reason: string;
+    voidedBy?: ObjectIdLike;
+    session?: ClientSession;
+  }): Promise<{ voidedCount: number; withholdings: TaxWithholdingDocument[] }> {
+    const { payrollRecordId, organizationId, reason, voidedBy, session } = params;
+
+    // Find all withholdings for this payroll record
+    const withholdings = await this.TaxWithholdingModel.find({
+      payrollRecordId: toObjectId(payrollRecordId),
+      organizationId: toObjectId(organizationId),
+      status: { $in: ['pending', 'submitted'] }, // Only cancel pending/submitted (per TaxStatusMachine)
+    }).session(session || null);
+
+    if (withholdings.length === 0) {
+      return { voidedCount: 0, withholdings: [] };
+    }
+
+    // Update all withholdings to cancelled status (with state machine validation)
+    const voidedAt = new Date();
+    for (const withholding of withholdings) {
+      // Validate state transition
+      const transition = TaxStatusMachine.validateTransition(
+        withholding.status,
+        TAX_STATUS.CANCELLED
+      );
+      if (!transition.success) {
+        logger.warn('Cannot cancel tax withholding', {
+          withholdingId: withholding._id.toString(),
+          currentStatus: withholding.status,
+          error: transition.error,
+        });
+        continue; // Skip withholdings that cannot be cancelled
+      }
+
+      withholding.status = TAX_STATUS.CANCELLED;
+      withholding.voidedAt = voidedAt;
+      withholding.voidedBy = voidedBy ? toObjectId(voidedBy) : undefined;
+      withholding.voidReason = reason;
+      withholding.notes = `${withholding.notes || ''}\n[VOIDED] ${reason}`.trim();
+      await withholding.save({ session });
+    }
+
+    // Emit tax:voided event
+    if (this.events) {
+      this.events.emitSync('tax:voided', {
+        withholdings: withholdings.map((w) => ({
+          id: w._id,
+          taxType: w.taxType,
+          amount: w.amount,
+        })),
+        payrollRecordId: toObjectId(payrollRecordId),
+        organizationId: toObjectId(organizationId),
+        reason,
+        voidedAt,
+        voidedBy,
+      });
+    }
+
+    logger.info('Tax withholdings voided', {
+      count: withholdings.length,
+      payrollRecordId: payrollRecordId.toString(),
+      reason,
+    });
+
+    return {
+      voidedCount: withholdings.length,
+      withholdings,
+    };
   }
 
   /**
    * Get tax withholdings for a specific employee
+   *
+   * @param organizationId - Required for multi-tenant isolation
+   * @param employeeId - The employee ID to find withholdings for
+   * @param options - Optional filters for year, taxType, status
    */
   async getByEmployee(
+    organizationId: ObjectIdLike,
     employeeId: ObjectIdLike,
     options?: { year?: number; taxType?: TaxType; status?: TaxStatus }
   ): Promise<TaxWithholdingDocument[]> {
-    return (this.TaxWithholdingModel as any)
-      .findByEmployee(toObjectId(employeeId), options)
-      .exec();
+    // Build query with organizationId enforcement for security
+    const query: Record<string, unknown> = {
+      organizationId: toObjectId(organizationId),
+      employeeId: toObjectId(employeeId),
+    };
+
+    if (options?.year) {
+      query['period.year'] = options.year;
+    }
+    if (options?.taxType) {
+      query.taxType = options.taxType;
+    }
+    if (options?.status) {
+      query.status = options.status;
+    }
+
+    return this.TaxWithholdingModel.find(query).exec();
   }
 
   // ============================================================================

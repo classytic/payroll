@@ -15,7 +15,9 @@ import {
   TAX_TYPE_VALUES,
   TAX_STATUS_VALUES,
 } from '../enums.js';
+import { TaxStatusMachine } from '../core/payroll-states.js';
 import { logger } from '../utils/logger.js';
+import { periodSchema } from '../schemas/common.js';
 
 // ============================================================================
 // Schema Definition
@@ -50,11 +52,8 @@ const taxWithholdingSchema = new Schema(
     },
 
     period: {
-      month: { type: Number, required: true, min: 1, max: 12 },
-      year: { type: Number, required: true, min: 2020 },
-      startDate: { type: Date, required: true },
-      endDate: { type: Date, required: true },
-      payDate: { type: Date, required: true },
+      type: periodSchema,
+      required: true,
     },
 
     amount: {
@@ -64,7 +63,7 @@ const taxWithholdingSchema = new Schema(
     },
     currency: {
       type: String,
-      default: 'BDT',
+      default: 'USD',
     },
 
     taxType: {
@@ -97,6 +96,12 @@ const taxWithholdingSchema = new Schema(
       ref: 'Transaction',
     },
     referenceNumber: String,
+
+    // Void metadata (when payroll is voided/reversed)
+    voidedAt: { type: Date },
+    voidedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    voidReason: { type: String },
+    voidMetadata: { type: Schema.Types.Mixed },
 
     notes: String,
     metadata: { type: Schema.Types.Mixed, default: {} },
@@ -136,9 +141,12 @@ taxWithholdingSchema.virtual('isSubmitted').get(function () {
 // ============================================================================
 
 taxWithholdingSchema.methods.markAsSubmitted = function (submittedAt = new Date()) {
-  if (this.status === TAX_STATUS.PAID) {
-    throw new Error('Cannot submit already paid tax withholding');
+  // Validate state transition
+  const transition = TaxStatusMachine.validateTransition(this.status, TAX_STATUS.SUBMITTED);
+  if (!transition.success) {
+    throw new Error(transition.error);
   }
+
   this.status = TAX_STATUS.SUBMITTED;
   this.submittedAt = submittedAt;
 
@@ -155,6 +163,12 @@ taxWithholdingSchema.methods.markAsPaid = function (
   referenceNumber?: string,
   paidAt = new Date()
 ) {
+  // Validate state transition
+  const transition = TaxStatusMachine.validateTransition(this.status, TAX_STATUS.PAID);
+  if (!transition.success) {
+    throw new Error(transition.error);
+  }
+
   this.status = TAX_STATUS.PAID;
   this.governmentTransactionId = transactionId;
   this.referenceNumber = referenceNumber;
@@ -359,6 +373,122 @@ taxWithholdingSchema.statics.getTotalByOrganization = function (
 };
 
 // ============================================================================
+// TTL Index Management
+// ============================================================================
+
+/**
+ * Add TTL index on any date field for automatic cleanup
+ *
+ * Creates a TTL index that automatically deletes documents after a specified time
+ * from the date stored in the field. Useful for auto-cleanup of voided tax withholdings.
+ *
+ * @param fieldName - Name of the date field (e.g., 'voidedAt', 'paidAt')
+ * @param ttlSeconds - Time in seconds after field date when document should be deleted
+ * @param options - Optional configuration
+ *
+ * @example Auto-delete voided withholdings after 90 days
+ * ```typescript
+ * await TaxWithholding.addTTLIndex('voidedAt', 90 * 24 * 60 * 60);
+ * ```
+ *
+ * @example Auto-delete paid withholdings after 7 years
+ * ```typescript
+ * const YEARS = 365.25 * 24 * 60 * 60;
+ * await TaxWithholding.addTTLIndex('paidAt', 7 * YEARS);
+ * ```
+ */
+taxWithholdingSchema.statics.addTTLIndex = async function (
+  fieldName: string,
+  ttlSeconds: number,
+  options: { partialFilter?: Record<string, unknown> } = {}
+): Promise<void> {
+  const collection = this.collection;
+  const indexName = `${fieldName}_ttl_1`;
+
+  try {
+    // Drop existing TTL index if it exists
+    const indexes = await collection.indexes();
+    const hasTTLIndex = indexes.some((idx) => idx.name === indexName);
+
+    if (hasTTLIndex) {
+      await collection.dropIndex(indexName);
+      logger.info('Dropped existing TTL index', { indexName, fieldName });
+    }
+
+    // Build index options
+    const indexOptions: {
+      name: string;
+      expireAfterSeconds: number;
+      partialFilterExpression?: Record<string, unknown>;
+    } = {
+      name: indexName,
+      expireAfterSeconds: ttlSeconds,
+    };
+
+    // Add partial filter to only apply TTL to documents with this field set
+    indexOptions.partialFilterExpression = {
+      [fieldName]: { $exists: true, $ne: null },
+      ...options.partialFilter,
+    };
+
+    // Create TTL index
+    await collection.createIndex(
+      { [fieldName]: 1 },
+      indexOptions
+    );
+
+    logger.info('Added TTL index for auto-cleanup', {
+      fieldName,
+      indexName,
+      expireAfterSeconds: ttlSeconds,
+      retentionDays: Math.round(ttlSeconds / (24 * 60 * 60)),
+      partialFilter: indexOptions.partialFilterExpression,
+    });
+  } catch (error) {
+    logger.error('Failed to add TTL index', {
+      fieldName,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+/**
+ * Remove TTL index from a field
+ *
+ * @param fieldName - Name of the field to remove TTL index from
+ *
+ * @example
+ * ```typescript
+ * await TaxWithholding.removeTTLIndex('voidedAt');
+ * ```
+ */
+taxWithholdingSchema.statics.removeTTLIndex = async function (
+  fieldName: string
+): Promise<void> {
+  const collection = this.collection;
+  const indexName = `${fieldName}_ttl_1`;
+
+  try {
+    const indexes = await collection.indexes();
+    const hasTTLIndex = indexes.some((idx) => idx.name === indexName);
+
+    if (hasTTLIndex) {
+      await collection.dropIndex(indexName);
+      logger.info('Removed TTL index', { fieldName, indexName });
+    } else {
+      logger.warn('TTL index not found', { fieldName, indexName });
+    }
+  } catch (error) {
+    logger.error('Failed to remove TTL index', {
+      fieldName,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+};
+
+// ============================================================================
 // Model Interface
 // ============================================================================
 
@@ -406,6 +536,13 @@ export interface TaxWithholdingModel extends Model<TaxWithholdingDocument> {
     organizationId: mongoose.Types.ObjectId,
     options?: { status?: TaxStatus; year?: number }
   ): Promise<{ totalAmount: number; count: number }>;
+
+  addTTLIndex(
+    fieldName: string,
+    ttlSeconds: number,
+    options?: { partialFilter?: Record<string, unknown> }
+  ): Promise<void>;
+  removeTTLIndex(fieldName: string): Promise<void>;
 }
 
 // ============================================================================

@@ -53,6 +53,7 @@ export {
   isOnProbation,
   calculateYearsOfService,
   isDateInRange,
+  isEffectiveForPeriod,
   getPayPeriodDateRange,
   formatDateForDB,
   parseDBDate,
@@ -62,6 +63,17 @@ export {
   getShortMonthName,
   default as dateUtils,
 } from './date.js';
+
+// ============================================================================
+// Money Utilities (Banker's Rounding for Payroll Compliance)
+// ============================================================================
+
+export {
+  roundMoney,
+  roundMoneyPositive,
+  percentageOf,
+  prorateAmount,
+} from './money.js';
 
 // ============================================================================
 // Calculation Utilities
@@ -83,20 +95,19 @@ export {
   calculateAllowances,
   calculateDeductions,
   calculateCompensationBreakdown,
-  calculateProRating,
-  applyProRating,
-  calculateProRatedSalary,
   applyTaxBrackets,
   calculateTax,
-  pipe,
-  compose,
-  createAllowanceCalculator,
-  createDeductionCalculator,
   calculateOvertime,
   calculateHourlyRate,
   calculateDailyRate,
   default as calculationUtils,
 } from './calculation.js';
+
+// Pro-rating utilities - use calculators/prorating.calculator.ts for advanced features
+export {
+  calculateProRating,
+  applyProRating,
+} from '../calculators/prorating.calculator.js';
 
 // ============================================================================
 // Validation Utilities

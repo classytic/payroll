@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose, { Schema, model } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import {
-  employmentFields,
+  createEmploymentFields,
   leaveBalanceFields,
   employeePlugin,
   getLeaveRequestModel,
@@ -52,7 +52,7 @@ describe('LeaveService (Single-Tenant Mode)', () => {
   });
 
   const employeeSchema = new Schema({
-    ...employmentFields,
+    ...createEmploymentFields(),
     ...leaveBalanceFields,
     // Override organizationId to be optional for single-tenant tests
     organizationId: { type: Schema.Types.ObjectId, required: false },
@@ -222,7 +222,7 @@ describe('LeaveService (Single-Tenant Mode)', () => {
     ).rejects.toThrow(/organizationId is required in multi-tenant mode/);
   });
 
-  it('should validate organization match in multi-tenant mode', async () => {
+  it('should reject cross-tenant access in multi-tenant mode (SECURITY)', async () => {
     const userId = new mongoose.Types.ObjectId();
     const orgId1 = new mongoose.Types.ObjectId();
     const orgId2 = new mongoose.Types.ObjectId();
@@ -250,6 +250,8 @@ describe('LeaveService (Single-Tenant Mode)', () => {
       },
     });
 
+    // SECURITY: In multi-tenant mode, org filter is applied at query level
+    // Returns "not found" instead of "mismatch" to avoid revealing employee existence
     await expect(
       service.requestLeave({
         organizationId: orgId2, // Trying to use wrong org
@@ -261,7 +263,7 @@ describe('LeaveService (Single-Tenant Mode)', () => {
           endDate: new Date('2024-06-07'),
         },
       })
-    ).rejects.toThrow(/Organization mismatch/);
+    ).rejects.toThrow(/Employee not found/);
   });
 
   it('should validate organization match in single-tenant mode when both values exist', async () => {

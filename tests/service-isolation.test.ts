@@ -8,19 +8,23 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { Repository } from '@classytic/mongokit';
 import { createEmployeeSchema, createPayrollRecordSchema } from '../src/schemas/index.js';
 import { employeePlugin } from '../src/plugins/index.js';
 import { EmployeeService, createEmployeeService } from '../src/services/employee.service.js';
 import { PayrollService, createPayrollService } from '../src/services/payroll.service.js';
 import { CompensationService, createCompensationService } from '../src/services/compensation.service.js';
+import { multiTenantPlugin } from '../src/core/repository-plugins.js';
 
 describe('Multi-Tenant Service Isolation', () => {
   let mongoServer: MongoMemoryServer;
   let EmployeeModel: mongoose.Model<any>;
   let PayrollRecordModel: mongoose.Model<any>;
-  let employeeService: EmployeeService;
-  let payrollService: PayrollService;
-  let compensationService: CompensationService;
+
+  // Services with org1 context
+  let org1EmployeeService: EmployeeService;
+  let org1PayrollService: PayrollService;
+  let org1CompensationService: CompensationService;
 
   // Test organizations
   const org1Id = new mongoose.Types.ObjectId();
@@ -45,10 +49,18 @@ describe('Multi-Tenant Service Isolation', () => {
     EmployeeModel = mongoose.model('Employee', employeeSchema);
     PayrollRecordModel = mongoose.model('PayrollRecord', createPayrollRecordSchema());
 
-    // Create services
-    employeeService = createEmployeeService(EmployeeModel);
-    payrollService = createPayrollService(PayrollRecordModel, employeeService);
-    compensationService = createCompensationService(EmployeeModel);
+    // Create repositories with org1 context (multi-tenant plugin)
+    const org1EmployeeRepo = new Repository(EmployeeModel, [
+      multiTenantPlugin(org1Id),
+    ]);
+    const org1PayrollRepo = new Repository(PayrollRecordModel, [
+      multiTenantPlugin(org1Id),
+    ]);
+
+    // Create services with org1 repositories
+    org1EmployeeService = createEmployeeService(org1EmployeeRepo);
+    org1PayrollService = createPayrollService(org1PayrollRepo, org1EmployeeService);
+    org1CompensationService = createCompensationService(org1EmployeeRepo);
   });
 
   afterAll(async () => {
@@ -102,29 +114,29 @@ describe('Multi-Tenant Service Isolation', () => {
   describe('EmployeeService Isolation', () => {
     describe('findById()', () => {
       it('should find employee in same organization', async () => {
-        const employee = await employeeService.findById(org1Employee._id, org1Id);
+        // org1EmployeeService has org1Id auto-injected
+        const employee = await org1EmployeeService.findById(org1Employee._id);
         expect(employee).toBeTruthy();
         expect(employee!.employeeId).toBe('ORG1-EMP-001');
       });
 
       it('should NOT find employee from different organization', async () => {
-        // Try to access Org 2's employee using Org 1's ID
-        const employee = await employeeService.findById(org2Employee._id, org1Id);
-        expect(employee).toBeNull();
+        // Try to access Org 2's employee using Org 1's service (has org1Id auto-injected)
+        const employee = await org1EmployeeService.findById(org2Employee._id);
+        expect(employee).toBeNull(); // Can't find because organizationId mismatch
       });
 
       it('should enforce organization isolation on direct access attempt', async () => {
-        // Try to access org2's employee with org1's credentials
-        const employee = await employeeService.findById(org2Employee._id, org1Id);
-        expect(employee).toBeNull();
+        // Try to access org2's employee with org1's service
+        const employee = await org1EmployeeService.findById(org2Employee._id);
+        expect(employee).toBeNull(); // Multi-tenant plugin blocks cross-org access
       });
     });
 
     describe('updateStatus()', () => {
       it('should update status in same organization', async () => {
-        const updated = await employeeService.updateStatus(
+        const updated = await org1EmployeeService.updateStatus(
           org1Employee._id,
-          org1Id,
           'on_leave'
         );
         expect(updated.status).toBe('on_leave');
@@ -132,8 +144,8 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT update status in different organization', async () => {
         await expect(
-          employeeService.updateStatus(org2Employee._id, org1Id, 'terminated')
-        ).rejects.toThrow();
+          org1EmployeeService.updateStatus(org2Employee._id, 'terminated')
+        ).rejects.toThrow(); // Should throw because employee not found in org1
 
         // Verify employee status unchanged
         const unchanged = await EmployeeModel.findById(org2Employee._id);
@@ -143,22 +155,20 @@ describe('Multi-Tenant Service Isolation', () => {
 
     describe('updateCompensation()', () => {
       it('should update compensation in same organization', async () => {
-        const updated = await employeeService.updateCompensation(
+        const updated = await org1EmployeeService.updateCompensation(
           org1Employee._id,
-          org1Id,
-          { baseAmount: 120000 }
+          { baseAmount: 120000, allowances: [], deductions: [], frequency: 'monthly', currency: 'USD' }
         );
         expect(updated.compensation.baseAmount).toBe(120000);
       });
 
       it('should NOT update compensation in different organization', async () => {
         await expect(
-          employeeService.updateCompensation(
+          org1EmployeeService.updateCompensation(
             org2Employee._id,
-            org1Id,
-            { baseAmount: 999999 } // Attempt to manipulate
+            { baseAmount: 999999, allowances: [], deductions: [], frequency: 'monthly', currency: 'USD' } // Attempt to manipulate
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because employee not found in org1
 
         // Verify compensation unchanged
         const unchanged = await EmployeeModel.findById(org2Employee._id);
@@ -170,9 +180,8 @@ describe('Multi-Tenant Service Isolation', () => {
   describe('CompensationService Isolation', () => {
     describe('updateBaseAmount()', () => {
       it('should update base amount in same organization', async () => {
-        const result = await compensationService.updateBaseAmount(
+        const result = await org1CompensationService.updateBaseAmount(
           org1Employee._id,
-          org1Id,
           110000
         );
         expect(result.baseAmount).toBe(110000);
@@ -180,12 +189,11 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT update base amount in different organization', async () => {
         await expect(
-          compensationService.updateBaseAmount(
+          org1CompensationService.updateBaseAmount(
             org2Employee._id,
-            org1Id,
             999999 // Attempt to manipulate
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because employee not found in org1
 
         // Verify unchanged
         const unchanged = await EmployeeModel.findById(org2Employee._id);
@@ -195,9 +203,8 @@ describe('Multi-Tenant Service Isolation', () => {
 
     describe('addAllowance()', () => {
       it('should add allowance in same organization', async () => {
-        const result = await compensationService.addAllowance(
+        const result = await org1CompensationService.addAllowance(
           org1Employee._id,
-          org1Id,
           { type: 'housing', value: 20000, taxable: true }
         );
         expect(result.allowances).toHaveLength(1);
@@ -205,12 +212,11 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT add allowance in different organization', async () => {
         await expect(
-          compensationService.addAllowance(
+          org1CompensationService.addAllowance(
             org2Employee._id,
-            org1Id,
             { type: 'housing', value: 50000, taxable: true }
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because employee not found in org1
 
         // Verify unchanged
         const unchanged = await EmployeeModel.findById(org2Employee._id);
@@ -220,9 +226,8 @@ describe('Multi-Tenant Service Isolation', () => {
 
     describe('addDeduction()', () => {
       it('should add deduction in same organization', async () => {
-        const result = await compensationService.addDeduction(
+        const result = await org1CompensationService.addDeduction(
           org1Employee._id,
-          org1Id,
           { type: 'insurance', value: 5000, auto: true }
         );
         expect(result.deductions).toHaveLength(1);
@@ -230,9 +235,8 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT add deduction in different organization', async () => {
         await expect(
-          compensationService.addDeduction(
+          org1CompensationService.addDeduction(
             org2Employee._id,
-            org1Id,
             { type: 'penalty', value: 99999, auto: true }
           )
         ).rejects.toThrow();
@@ -297,9 +301,8 @@ describe('Multi-Tenant Service Isolation', () => {
 
     describe('markAsPaid()', () => {
       it('should mark payroll as paid in same organization', async () => {
-        const updated = await payrollService.markAsPaid(
+        const updated = await org1PayrollService.markAsPaid(
           org1Payroll._id,
-          org1Id,
           { paidAt: new Date() }
         );
         expect(updated.status).toBe('paid');
@@ -307,12 +310,11 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT mark payroll as paid in different organization', async () => {
         await expect(
-          payrollService.markAsPaid(
-            org2Payroll._id,
-            org1Id, // Wrong org!
+          org1PayrollService.markAsPaid(
+            org2Payroll._id, // Different org's payroll
             { paidAt: new Date() }
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because payroll not found in org1
 
         // Verify unchanged
         const unchanged = await PayrollRecordModel.findById(org2Payroll._id);
@@ -320,30 +322,29 @@ describe('Multi-Tenant Service Isolation', () => {
       });
     });
 
-    describe('markAsProcessed()', () => {
-      it('should mark payroll as processed in same organization', async () => {
-        const updated = await payrollService.markAsProcessed(
+    describe('updateStatus()', () => {
+      it('should update status in same organization', async () => {
+        const updated = await org1PayrollService.updateStatus(
           org1Payroll._id,
-          org1Id
+          'processing'
         );
         expect(updated.status).toBe('processing');
       });
 
-      it('should NOT mark payroll as processed in different organization', async () => {
+      it('should NOT update status in different organization', async () => {
         await expect(
-          payrollService.markAsProcessed(
-            org2Payroll._id,
-            org1Id // Wrong org!
+          org1PayrollService.updateStatus(
+            org2Payroll._id, // Different org's payroll
+            'paid'
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because payroll not found in org1
       });
     });
 
     describe('generateForEmployee()', () => {
       it('should generate payroll for employee in same organization', async () => {
-        const payroll = await payrollService.generateForEmployee(
+        const payroll = await org1PayrollService.generateForEmployee(
           org1Employee._id,
-          org1Id,
           4,
           2024
         );
@@ -353,13 +354,12 @@ describe('Multi-Tenant Service Isolation', () => {
 
       it('should NOT generate payroll for employee in different organization', async () => {
         await expect(
-          payrollService.generateForEmployee(
-            org2Employee._id,
-            org1Id, // Wrong org!
+          org1PayrollService.generateForEmployee(
+            org2Employee._id, // Different org's employee
             4,
             2024
           )
-        ).rejects.toThrow();
+        ).rejects.toThrow(); // Should throw because employee not found in org1
       });
     });
   });
@@ -368,12 +368,11 @@ describe('Multi-Tenant Service Isolation', () => {
     it('should prevent salary manipulation across organizations', async () => {
       // Attacker from Org 1 tries to inflate Org 2 employee's salary
       await expect(
-        compensationService.updateBaseAmount(
+        org1CompensationService.updateBaseAmount(
           org2Employee._id,
-          org1Id, // Attacker's org
           999999 // Malicious amount
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(); // Multi-tenant plugin blocks access
 
       // Verify target employee unchanged
       const target = await EmployeeModel.findById(org2Employee._id);
@@ -383,12 +382,11 @@ describe('Multi-Tenant Service Isolation', () => {
     it('should prevent status manipulation across organizations', async () => {
       // Attacker from Org 1 tries to terminate Org 2 employee
       await expect(
-        employeeService.updateStatus(
+        org1EmployeeService.updateStatus(
           org2Employee._id,
-          org1Id,
           'terminated'
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(); // Multi-tenant plugin blocks access
 
       // Verify target employee still active
       const target = await EmployeeModel.findById(org2Employee._id);
@@ -421,12 +419,11 @@ describe('Multi-Tenant Service Isolation', () => {
 
       // Attacker from Org 1 tries to mark Org 2's payroll as paid
       await expect(
-        payrollService.markAsPaid(
+        org1PayrollService.markAsPaid(
           org2Payroll._id,
-          org1Id, // Attacker's org
           { paidAt: new Date() }
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(); // Multi-tenant plugin blocks access
 
       // Verify unchanged
       const target = await PayrollRecordModel.findById(org2Payroll._id);
@@ -437,19 +434,17 @@ describe('Multi-Tenant Service Isolation', () => {
   describe('Same-Org Operations (Positive Tests)', () => {
     it('should allow full compensation workflow within same org', async () => {
       // Update base amount
-      await compensationService.updateBaseAmount(org1Employee._id, org1Id, 110000);
+      await org1CompensationService.updateBaseAmount(org1Employee._id, 110000);
 
       // Add allowance
-      await compensationService.addAllowance(
+      await org1CompensationService.addAllowance(
         org1Employee._id,
-        org1Id,
         { type: 'housing', value: 20000, taxable: true }
       );
 
       // Add deduction
-      await compensationService.addDeduction(
+      await org1CompensationService.addDeduction(
         org1Employee._id,
-        org1Id,
         { type: 'insurance', value: 5000, auto: true }
       );
 
@@ -462,20 +457,18 @@ describe('Multi-Tenant Service Isolation', () => {
 
     it('should allow full payroll workflow within same org', async () => {
       // Generate payroll
-      const payroll = await payrollService.generateForEmployee(
+      const payroll = await org1PayrollService.generateForEmployee(
         org1Employee._id,
-        org1Id,
         6,
         2024
       );
 
-      // Mark as processed
-      await payrollService.markAsProcessed(payroll._id, org1Id);
+      // Update status to processing
+      await org1PayrollService.updateStatus(payroll._id, 'processing');
 
       // Mark as paid
-      const paid = await payrollService.markAsPaid(
+      const paid = await org1PayrollService.markAsPaid(
         payroll._id,
-        org1Id,
         { paidAt: new Date() }
       );
 

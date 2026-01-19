@@ -18,6 +18,7 @@ import type {
   DeepPartial,
   EmployeeIdentityMode,
 } from './types.js';
+import { roundMoney } from './utils/money.js';
 
 // ============================================================================
 // Default Configuration
@@ -25,13 +26,45 @@ import type {
 
 export const HRM_CONFIG: HRMConfig = {
   dataRetention: {
-    payrollRecordsTTL: 63072000, // 2 years in seconds
+    /**
+     * Default retention period for payroll records in seconds
+     *
+     * STANDARD APPROACH: expireAt field + configurable TTL index
+     *
+     * ## How It Works:
+     * 1. Set expireAt date on each payroll record
+     * 2. Call PayrollRecord.configureRetention() at app startup
+     * 3. MongoDB deletes documents when expireAt is reached
+     *
+     * ## Usage:
+     *
+     * @example Configure at initialization
+     * ```typescript
+     * await payroll.init({ ... });
+     * await PayrollRecord.configureRetention(0); // 0 = delete when expireAt reached
+     * ```
+     *
+     * @example Set expireAt per record
+     * ```typescript
+     * const expireAt = PayrollRecord.calculateExpireAt(7); // 7 years
+     * await PayrollRecord.updateOne({ _id }, { expireAt });
+     * ```
+     *
+     * ## Jurisdiction Requirements:
+     * - USA: 7 years → 220752000 seconds
+     * - EU/UK: 6 years → 189216000 seconds
+     * - Germany: 10 years → 315360000 seconds
+     * - India: 8 years → 252288000 seconds
+     *
+     * Set to 0 to disable TTL
+     */
+    payrollRecordsTTL: 63072000, // 2 years - adjust per jurisdiction
     exportWarningDays: 30,
     archiveBeforeDeletion: true,
   },
 
   payroll: {
-    defaultCurrency: 'BDT',
+    defaultCurrency: 'USD',
     allowProRating: true,
     attendanceIntegration: true,
     autoDeductions: true,
@@ -178,8 +211,15 @@ export const ROLE_MAPPING: RoleMappingConfig = {
 
 /**
  * Calculate tax based on annual income
+ *
+ * Uses banker's rounding to prevent systematic bias in tax calculations.
+ * Tax is calculated progressively across brackets and rounded once at the end.
+ *
+ * @param annualIncome - Annual income in major units (dollars/rupees/taka)
+ * @param currency - Currency code (default: 'USD')
+ * @returns Tax amount in major units, properly rounded with banker's rounding
  */
-export function calculateTax(annualIncome: number, currency = 'BDT'): number {
+export function calculateTax(annualIncome: number, currency = 'USD'): number {
   const brackets = TAX_BRACKETS[currency];
   if (!brackets) return 0;
 
@@ -190,7 +230,10 @@ export function calculateTax(annualIncome: number, currency = 'BDT'): number {
       tax += taxableAmount * bracket.rate;
     }
   }
-  return Math.round(tax);
+
+  // Use roundMoney for consistency with all other money calculations
+  // This ensures identical rounding behavior across all tax calculations
+  return roundMoney(tax);
 }
 
 /**

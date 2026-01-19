@@ -71,7 +71,7 @@ describe('Package Exports', () => {
 
   it('should export configuration', () => {
     expect(HRM_CONFIG).toBeDefined();
-    expect(HRM_CONFIG.payroll.defaultCurrency).toBe('BDT');
+    expect(HRM_CONFIG.payroll.defaultCurrency).toBe('USD');
     expect(mergeConfig).toBeDefined();
   });
 
