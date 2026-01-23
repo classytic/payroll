@@ -565,8 +565,9 @@ payrollRecordSchema.statics.addTTLIndex = async function (
     };
 
     // Add partial filter to only apply TTL to documents with this field set
+    // Note: MongoDB partial filters don't support $ne operator
     indexOptions.partialFilterExpression = {
-      [fieldName]: { $exists: true, $ne: null },
+      [fieldName]: { $exists: true },
       ...options.partialFilter,
     };
 

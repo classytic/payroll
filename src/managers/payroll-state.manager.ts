@@ -18,6 +18,7 @@ import type {
   ReversePayrollResult,
   RestorePayrollParams,
   RestorePayrollResult,
+  TaxWithholdingDocument,
 } from '../types.js';
 import { getLogger } from '../utils/logger.js';
 import { toObjectId } from '../utils/query-builders.js';
@@ -74,13 +75,14 @@ import type { EventBus } from '../core/events.js';
  */
 export class PayrollStateManager<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
-  TTransaction extends AnyDocument = AnyDocument
+  TTransaction extends AnyDocument = AnyDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument
 > {
   constructor(
     private readonly models: {
       PayrollRecordModel: Model<TPayrollRecord>;
       TransactionModel: Model<TTransaction> | null;
-      TaxWithholdingModel?: Model<AnyDocument> | null;
+      TaxWithholdingModel?: Model<TTaxWithholding> | null;
     },
     private readonly events: EventBus
   ) {}
@@ -442,14 +444,15 @@ export class PayrollStateManager<
  */
 export function createPayrollStateManager<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
-  TTransaction extends AnyDocument = AnyDocument
+  TTransaction extends AnyDocument = AnyDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument
 >(
   models: {
     PayrollRecordModel: Model<TPayrollRecord>;
     TransactionModel: Model<TTransaction> | null;
-    TaxWithholdingModel?: Model<AnyDocument> | null;
+    TaxWithholdingModel?: Model<TTaxWithholding> | null;
   },
   events: EventBus
-): PayrollStateManager<TPayrollRecord, TTransaction> {
-  return new PayrollStateManager(models, events) as any;
+): PayrollStateManager<TPayrollRecord, TTransaction, TTaxWithholding> {
+  return new PayrollStateManager<TPayrollRecord, TTransaction, TTaxWithholding>(models, events);
 }

@@ -1,6 +1,13 @@
 # Changelog
 
-## [2.5.0] - 2026-01-19
+## [2.6.1] - 2026-01-21
+
+### Fixed
+
+- **Critical: MongoDB TTL Index Bug** - Fixed `addTTLIndex()` partial filter using unsupported `$ne: null` operator. Changed to `{ $exists: true }` which MongoDB supports.
+- **Critical: Build Configuration** - Fixed tsup bundling (v2.5.0 was unusable due to broken imports)
+- **Security**: Multi-tenant isolation in `LeaveService.checkOverlap`
+- **Security**: Salary processing and transactions use resolved IDs
 
 ### Breaking Changes
 

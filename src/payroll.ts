@@ -259,6 +259,8 @@ export class Payroll<
         PayrollRecordModel,
         TransactionModel,
         AttendanceModel: AttendanceModel ?? null,
+        LeaveRequestModel: config.LeaveRequestModel ?? null,
+        TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
       config: customConfig as Partial<HRMConfig>,
       singleTenant: singleTenant ?? null,
@@ -271,8 +273,8 @@ export class Payroll<
         EmployeeModel,
         PayrollRecordModel,
         TransactionModel,
-        LeaveRequestModel: (config as any).LeaveRequestModel ?? null,
-        TaxWithholdingModel: (config as any).TaxWithholdingModel ?? null,
+        LeaveRequestModel: config.LeaveRequestModel ?? null,
+        TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
       this._container as any
     ) as any;
@@ -284,8 +286,8 @@ export class Payroll<
         PayrollRecordModel,
         TransactionModel,
         AttendanceModel: AttendanceModel ?? null,
-        LeaveRequestModel: (config as any).LeaveRequestModel ?? null,
-        TaxWithholdingModel: (config as any).TaxWithholdingModel ?? null,
+        LeaveRequestModel: config.LeaveRequestModel ?? null,
+        TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
       this._container as any,
       this._events,
@@ -356,7 +358,7 @@ export class Payroll<
       {
         PayrollRecordModel,
         TransactionModel,
-        TaxWithholdingModel: (config as any).TaxWithholdingModel ?? null,
+        TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
       this._events
     ) as any;
@@ -1539,10 +1541,12 @@ export class PayrollBuilder<
       PayrollRecordModel: this._models.PayrollRecordModel,
       TransactionModel: this._models.TransactionModel,
       AttendanceModel: this._models.AttendanceModel,
+      LeaveRequestModel: this._models.LeaveRequestModel,
+      TaxWithholdingModel: this._models.TaxWithholdingModel,
       config: this._config,
       singleTenant: this._singleTenant,
       logger: this._logger,
-    });
+    } as any);
 
     return payroll;
   }

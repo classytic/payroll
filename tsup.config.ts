@@ -10,9 +10,10 @@ export default defineConfig({
   format: ['esm'],
   dts: true,
   clean: true,
-  bundle: false,
+  bundle: true, // Bundle dependencies into output files
   sourcemap: true,
   treeshake: true,
+  splitting: false, // Disable code splitting for cleaner output
   external: [
     'mongoose',
     '@classytic/mongokit',

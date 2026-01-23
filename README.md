@@ -42,7 +42,6 @@ await payroll.processSalary({
 - **Compensation**: Salary, allowances, deductions
 - **Bulk Processing**: Handle 10k+ employees with streaming
 - **Multi-tenant**: Automatic organization isolation
-- **Pagination**: Mongokit standard pagination
 - **Events & Webhooks**: React to payroll events
 - **Type-safe**: Full TypeScript support
 
@@ -61,6 +60,16 @@ await payroll.processSalary({
 // Hire
 await payroll.hire({ organizationId, employment, compensation });
 
+// Get employee
+const employee = await payroll.getEmployee({ employeeId, organizationId });
+
+// Get by flexible identity (userId, employeeId, or email)
+const emp = await payroll.getEmployeeByIdentity({
+  identity: 'EMP-001',  // or userId or email
+  organizationId,
+  mode: 'employeeId',   // 'userId' | 'employeeId' | 'email' | 'any'
+});
+
 // Update
 await payroll.updateEmployment({ employeeId, updates: { position: 'Lead' } });
 
@@ -69,6 +78,26 @@ await payroll.terminate({ employeeId, terminationDate, reason: 'resignation' });
 
 // Re-hire
 await payroll.reHire({ employeeId, hireDate: new Date() });
+```
+
+## Listing Employees
+
+Employee listing/queries are done at app level using your models directly:
+
+```typescript
+// Use your EmployeeModel with mongokit or mongoose directly
+const employees = await EmployeeModel.find({
+  organizationId,
+  'employment.status': 'active'
+});
+
+// Or with mongokit repository
+const repo = createRepository(EmployeeModel);
+const result = await repo.getAll({
+  filters: { organizationId, 'employment.status': 'active' },
+  page: 1,
+  limit: 100,
+});
 ```
 
 ## Compensation
@@ -92,21 +121,6 @@ await payroll.processBulkPayroll({
   period: { month: 1, year: 2024 },
   onProgress: ({ current, total }) => console.log(`${current}/${total}`),
 });
-```
-
-## Pagination
-
-All service queries return mongokit's standard pagination:
-
-```typescript
-const result = await payroll.managers.employee.service.findActive({
-  page: 1,
-  limit: 100,
-  sort: '-createdAt',
-});
-
-console.log(result.docs);   // EmployeeDocument[]
-console.log(result.total);  // Total count
 ```
 
 ## Leave Management
@@ -186,7 +200,35 @@ await payroll.registerWebhook({
 
 ## Tenant Modes
 
-### Multi-Tenant (Default)
+### Single-Tenant (Recommended for most apps)
+
+For apps serving one organization:
+
+```typescript
+const payroll = createPayrollInstance()
+  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+  .forSingleTenant({ organizationId: YOUR_ORG_ID, autoInject: true })
+  .build();
+
+// No organizationId needed - auto-injected
+await payroll.hire({
+  employment: { email: 'dev@example.com', position: 'Engineer' },
+  compensation: { baseSalary: 80000, currency: 'USD' },
+});
+
+await payroll.processSalary({
+  employeeId,
+  period: { month: 1, year: 2024 },
+});
+
+await payroll.getEmployee({ employeeId });
+await payroll.updateEmployment({ employeeId, updates: { position: 'Lead' } });
+await payroll.terminate({ employeeId, terminationDate, reason: 'resignation' });
+```
+
+### Multi-Tenant
+
+For SaaS apps serving multiple organizations:
 
 ```typescript
 const payroll = createPayrollInstance()
@@ -195,18 +237,8 @@ const payroll = createPayrollInstance()
 
 // organizationId required on all operations
 await payroll.hire({ organizationId, employment, compensation });
-```
-
-### Single-Tenant
-
-```typescript
-const payroll = createPayrollInstance()
-  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
-  .forSingleTenant({ organizationId: YOUR_ORG_ID, autoInject: true })
-  .build();
-
-// organizationId auto-injected
-await payroll.hire({ employment, compensation });
+await payroll.processSalary({ organizationId, employeeId, period });
+await payroll.getEmployee({ organizationId, employeeId });
 ```
 
 ## Pure Calculators
@@ -311,20 +343,6 @@ import type {
   PayrollBreakdown,
 } from '@classytic/payroll';
 ```
-
-## Architecture
-
-7 domain managers via `payroll.managers`:
-
-| Manager | Purpose |
-|---------|---------|
-| `employee` | Employee lifecycle & queries |
-| `compensation` | Salary, allowances, deductions |
-| `payroll` | Payroll record operations |
-| `leave` | Leave management |
-| `repository` | Multi-tenant data access |
-| `salary` | Salary processing & calculations |
-| `bulk` | Bulk operations with streaming |
 
 ## Security
 

@@ -299,6 +299,8 @@ export interface PayrollInitConfig<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
+  TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument,
+  TTaxWithholding extends TaxWithholdingDocument = TaxWithholdingDocument,
 > {
   /** Employee model (required) - strongly typed */
   EmployeeModel: Model<TEmployee>;
@@ -308,6 +310,10 @@ export interface PayrollInitConfig<
   TransactionModel: Model<TTransaction>;
   /** Attendance model (optional, for integration) - strongly typed */
   AttendanceModel?: Model<TAttendance> | null;
+  /** Leave request model (optional) - strongly typed */
+  LeaveRequestModel?: Model<TLeaveRequest> | null;
+  /** Tax withholding model (optional) - strongly typed */
+  TaxWithholdingModel?: Model<TTaxWithholding> | null;
   /** Single-tenant configuration */
   singleTenant?: SingleTenantConfig | null;
   /** Custom logger */
