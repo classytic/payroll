@@ -19,7 +19,7 @@ import { Types } from 'mongoose';
  */
 export interface ContainerLike {
   isSingleTenant(): boolean;
-  getSingleTenantConfig(): { organizationId?: any; autoInject?: boolean } | null;
+  getSingleTenantConfig(): { organizationId?: ObjectIdLike; autoInject?: boolean } | null;
   getOrganizationId(): string | null;
 }
 

@@ -25,7 +25,7 @@ beforeAll(async () => {
   disableLogging();
 
   // MongoMemoryServer doesn't support transactions without replica set.
-  mongoose.startSession = (async () => null) as any;
+  const mockSession = { startTransaction: () => { throw new Error("Transaction numbers are only allowed on a replica set member"); }, commitTransaction: async () => {}, abortTransaction: async () => {}, endSession: () => {}, inTransaction: () => false }; mongoose.startSession = (async () => mockSession) as any;
 });
 
 afterAll(async () => {
@@ -274,8 +274,8 @@ describe('Retry Behavior Test Suite', () => {
     });
   });
 
-  describe('❌ BLOCKED: Audit Trail Preservation', () => {
-    it('should not allow retry for voided payroll (preserve audit trail)', async () => {
+  describe('❌ BLOCKED: Voided Payroll Cannot Be Retried', () => {
+    it('should not allow retry for voided payroll (intentionally cancelled)', async () => {
       const payroll = createPayrollInstance()
         .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
         .forSingleTenant({ organizationId: orgId })
@@ -289,48 +289,63 @@ describe('Retry Behavior Test Suite', () => {
         })
       );
 
-      // Retry should fail with audit trail message
+      // Retry should fail - voided means intentionally cancelled
       await expect(
         payroll.processSalary({
           employeeId,
           month: 5,
           year: 2024,
         })
-      ).rejects.toThrow(/preserve audit trail/i);
+      ).rejects.toThrow(/voided payroll.*restorePayroll/i);
 
       // Voided record should still exist (not deleted)
       const record = await PayrollRecordModel.findById(voidedRecord._id);
       expect(record).not.toBeNull();
       expect(record?.status).toBe('voided');
     });
+  });
 
-    it('should not allow retry for reversed payroll (preserve audit trail)', async () => {
+  describe('✅ ALLOWED: Re-processing After Reversal', () => {
+    it('should allow re-processing for reversed payroll (create new record)', async () => {
       const payroll = createPayrollInstance()
         .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
         .forSingleTenant({ organizationId: orgId })
         .build();
 
       // Create a reversed record (correction after payment)
+      // Note: isVoided must be true to exclude from unique index (allows re-processing)
       const reversedRecord = await PayrollRecordModel.create(
         createPayrollData(6, 2024, {
           status: 'reversed',
+          isVoided: true, // Required for unique index partial filter
           transactionId: new mongoose.Types.ObjectId(),
+          payrollRunType: 'regular',
         })
       );
 
-      // Retry should fail with audit trail message
-      await expect(
-        payroll.processSalary({
-          employeeId,
-          month: 6,
-          year: 2024,
-        })
-      ).rejects.toThrow(/preserve audit trail/i);
+      // Re-processing after reversal should SUCCEED (create new record)
+      const result = await payroll.processSalary({
+        employeeId,
+        month: 6,
+        year: 2024,
+      });
 
-      // Reversed record should still exist (not deleted)
-      const record = await PayrollRecordModel.findById(reversedRecord._id);
-      expect(record).not.toBeNull();
-      expect(record?.status).toBe('reversed');
+      // New record should be created
+      expect(result.payrollRecord._id.toString()).not.toBe(reversedRecord._id.toString());
+      expect(result.payrollRecord.status).toBe('paid');
+
+      // Reversed record should still exist (preserved for audit)
+      const oldRecord = await PayrollRecordModel.findById(reversedRecord._id);
+      expect(oldRecord).not.toBeNull();
+      expect(oldRecord?.status).toBe('reversed');
+
+      // Both records should exist for the same period
+      const allRecords = await PayrollRecordModel.find({
+        employeeId: reversedRecord.employeeId,
+        'period.month': 6,
+        'period.year': 2024,
+      });
+      expect(allRecords).toHaveLength(2);
     });
   });
 
@@ -425,36 +440,60 @@ describe('Retry Behavior Test Suite', () => {
     });
   });
 
-  describe('❌ BLOCKED: Data Integrity Preservation', () => {
-    it('should not allow retry for pending payroll without transaction (preserve data)', async () => {
+  describe('✅ FIXED: Pending Records Without Transaction Can Be Retried', () => {
+    it('should allow retry for pending payroll without transaction (v2.8.0+ fix)', async () => {
       const payroll = createPayrollInstance()
         .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
         .forSingleTenant({ organizationId: orgId })
         .build();
 
-      // Create a pending record without transaction (incomplete processing)
+      // Create a pending record without transaction (incomplete processing / crash recovery)
       const pendingRecord = await PayrollRecordModel.create(
         createPayrollData(9, 2024, { status: 'pending' })
       );
 
-      // Retry should fail with data integrity message
+      // Retry should now succeed - pending records without transaction are safe to delete
+      const result = await payroll.processSalary({
+        employeeId,
+        month: 9,
+        year: 2024,
+      });
+
+      // New record created successfully
+      expect(result.payrollRecord).toBeDefined();
+      expect(result.payrollRecord.status).toBe('paid');
+
+      // Old pending record should be gone (cascade deleted)
+      const oldRecord = await PayrollRecordModel.findById(pendingRecord._id);
+      expect(oldRecord).toBeNull();
+    });
+
+    it('should still block retry for pending payroll WITH transaction (preserve integrity)', async () => {
+      const payroll = createPayrollInstance()
+        .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+        .forSingleTenant({ organizationId: orgId })
+        .build();
+
+      const txId = new mongoose.Types.ObjectId();
+
+      // Create a pending record WITH transaction (partial completion - needs manual review)
+      await PayrollRecordModel.create(
+        createPayrollData(8, 2024, { status: 'pending', transactionId: txId })
+      );
+
+      // Retry should fail - would orphan the transaction
       await expect(
         payroll.processSalary({
           employeeId,
-          month: 9,
+          month: 8,
           year: 2024,
         })
-      ).rejects.toThrow(/preserve data integrity/i);
-
-      // Pending record should still exist (not deleted)
-      const record = await PayrollRecordModel.findById(pendingRecord._id);
-      expect(record).not.toBeNull();
-      expect(record?.status).toBe('pending');
+      ).rejects.toThrow(/orphan financial records/i);
     });
   });
 
   describe('Error Messages & Context', () => {
-    it('should provide detailed error context for audit trail preservation', async () => {
+    it('should provide detailed error context for voided payroll', async () => {
       const payroll = createPayrollInstance()
         .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
         .forSingleTenant({ organizationId: orgId })
@@ -476,10 +515,9 @@ describe('Retry Behavior Test Suite', () => {
         expect.fail('Should have thrown an error');
       } catch (error: any) {
         expect(error).toBeInstanceOf(PayrollError);
-        expect(error.message).toContain('voided');
-        expect(error.message).toContain('preserve audit trail');
+        expect(error.message).toMatch(/voided payroll.*restorePayroll/i);
         expect(error.context?.status).toBe('voided');
-        expect(error.context?.reason).toBe('audit_trail_preservation');
+        expect(error.context?.reason).toBe('voided_requires_restore');
       }
     });
 

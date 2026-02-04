@@ -309,7 +309,7 @@ export function calculateOvertime(
   overtimeHours: number,
   multiplier = 1.5
 ): number {
-  return Math.round(hourlyRate * overtimeHours * multiplier);
+  return roundMoney(hourlyRate * overtimeHours * multiplier, 2);
 }
 
 /**
@@ -319,7 +319,7 @@ export function calculateHourlyRate(
   monthlySalary: number,
   hoursPerMonth = 176 // 44 hours/week * 4 weeks
 ): number {
-  return Math.round(monthlySalary / hoursPerMonth);
+  return roundMoney(monthlySalary / hoursPerMonth, 2);
 }
 
 /**
@@ -329,7 +329,7 @@ export function calculateDailyRate(
   monthlySalary: number,
   daysPerMonth = 22
 ): number {
-  return Math.round(monthlySalary / daysPerMonth);
+  return roundMoney(monthlySalary / daysPerMonth, 2);
 }
 
 // ============================================================================

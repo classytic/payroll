@@ -243,7 +243,12 @@ export interface ValidationConfig {
   identityFallbacks: EmployeeIdentityMode[];
 }
 
-/** Tax bracket definition */
+/**
+ * Tax bracket definition.
+ *
+ * Tax brackets should be managed by your application and passed at calculation time.
+ * Use `effectiveFrom`/`effectiveTo` to version brackets when tax rates change.
+ */
 export interface TaxBracket {
   /** Minimum income for bracket */
   min: number;
@@ -251,6 +256,136 @@ export interface TaxBracket {
   max: number;
   /** Tax rate (0-1) */
   rate: number;
+  /** Start date from which this bracket applies (inclusive) */
+  effectiveFrom?: Date;
+  /** End date until which this bracket applies (inclusive, null = still active) */
+  effectiveTo?: Date | null;
+}
+
+/**
+ * Pre-tax deduction input for tax calculation
+ *
+ * Deductions that reduce taxable income before tax brackets are applied.
+ * Common examples: pension, provident fund, 401k, health savings.
+ */
+export interface PreTaxDeductionInput {
+  /** Deduction type identifier */
+  type: string;
+  /** Deduction amount */
+  amount: number;
+}
+
+/**
+ * Tax credit/rebate input
+ *
+ * Credits that reduce tax liability after tax calculation.
+ * Different from deductions which reduce taxable income.
+ */
+export interface TaxCreditInput {
+  /** Credit type identifier (e.g., 'investment', 'charitable', 'education') */
+  type: string;
+  /** Credit amount */
+  amount: number;
+  /** Maximum as percentage of tax liability (0-1). If set, credit is capped. */
+  maxPercent?: number;
+}
+
+/**
+ * Enhanced tax calculation options
+ *
+ * Provides jurisdiction-aware tax calculation with support for:
+ * - Standard deduction / tax-free threshold
+ * - Demographic-based thresholds (senior, disabled, etc.)
+ * - Pre-tax deductions (pension, 401k)
+ * - Tax credits/rebates
+ *
+ * @example
+ * ```typescript
+ * const taxOptions: TaxCalculationOptions = {
+ *   applyStandardDeduction: true,
+ *   taxpayerCategory: 'senior',
+ *   preTaxDeductions: [
+ *     { type: 'provident_fund', amount: 5000 },
+ *     { type: 'pension', amount: 3000 },
+ *   ],
+ *   taxCredits: [
+ *     { type: 'investment', amount: 2000, maxPercent: 0.15 },
+ *   ],
+ * };
+ * ```
+ */
+export interface TaxCalculationOptions {
+  /**
+   * Apply standard deduction from jurisdiction config
+   *
+   * When true, subtracts TaxConfiguration.standardDeduction from
+   * taxable income before applying tax brackets.
+   *
+   * @default false
+   */
+  applyStandardDeduction?: boolean;
+
+  /**
+   * Taxpayer category for threshold lookup
+   *
+   * Used to look up the appropriate tax-free threshold from
+   * TaxConfiguration.thresholdsByCategory. If not found,
+   * falls back to standardDeduction.
+   *
+   * Common categories: 'standard', 'senior', 'disabled', 'veteran', 'female'
+   *
+   * @example 'senior' - for taxpayers 65+
+   */
+  taxpayerCategory?: string;
+
+  /**
+   * Override thresholds by category
+   *
+   * Allows runtime override of jurisdiction thresholds.
+   * Useful for custom/organization-specific rules.
+   *
+   * @example { senior: 500000, disabled: 550000 }
+   */
+  thresholdOverrides?: Record<string, number>;
+
+  /**
+   * Pre-tax deductions (reduce taxable income)
+   *
+   * These deductions are subtracted from gross income before
+   * tax brackets are applied. Common examples:
+   * - Pension/401k contributions
+   * - Health savings account (HSA)
+   * - Provident fund
+   *
+   * Note: Employee's compensation.deductions with reducesTaxableIncome=true
+   * are automatically included. Use this for additional one-time deductions.
+   */
+  preTaxDeductions?: PreTaxDeductionInput[];
+
+  /**
+   * Tax credits/rebates (reduce tax liability)
+   *
+   * Applied after tax calculation. Different from deductions:
+   * - Deduction: reduces taxable income
+   * - Credit: reduces calculated tax amount
+   *
+   * @example
+   * ```typescript
+   * taxCredits: [
+   *   { type: 'investment', amount: 15000, maxPercent: 0.15 }, // Max 15% of tax
+   *   { type: 'charitable', amount: 5000 }, // Full credit
+   * ]
+   * ```
+   */
+  taxCredits?: TaxCreditInput[];
+
+  /**
+   * Standard deduction amount (annual)
+   *
+   * Direct override for standard deduction. Takes precedence over
+   * jurisdiction config when provided.
+   */
+  standardDeductionOverride?: number;
 }
 
 /** Salary band range */
@@ -371,6 +506,25 @@ export interface Deduction {
   effectiveFrom?: Date;
   effectiveTo?: Date | null;
   description?: string;
+  /**
+   * Whether this deduction reduces taxable income (pre-tax deduction)
+   *
+   * When true, this deduction is subtracted from gross income before
+   * tax calculation. Common examples: pension contributions, 401k,
+   * provident fund, health savings account (HSA).
+   *
+   * @default false (post-tax deduction)
+   *
+   * @example
+   * ```typescript
+   * // Provident fund contribution reduces taxable income
+   * { type: 'provident_fund', amount: 5000, reducesTaxableIncome: true }
+   *
+   * // Loan repayment does NOT reduce taxable income
+   * { type: 'loan', amount: 2000, reducesTaxableIncome: false }
+   * ```
+   */
+  reducesTaxableIncome?: boolean;
 }
 
 /** Compensation structure */
@@ -535,6 +689,12 @@ export interface PayrollRecordDocument extends Document {
   payrollRunType?: PayrollRunType;
 
   /**
+   * Payment frequency at time of processing (v2.9.0+)
+   * Stored for proper idempotency key reconstruction in void/reverse operations
+   */
+  paymentFrequency?: PaymentFrequency;
+
+  /**
    * Retroactive adjustment details (for back-pay or corrections)
    * Only populated when payrollRunType is 'retroactive'
    */
@@ -582,6 +742,11 @@ export interface PayrollRecordDocument extends Document {
    * expireAt: undefined
    */
   expireAt?: Date | null;
+
+  // Instance methods
+  addCorrection(previousAmount: number, newAmount: number, reason: string, correctedBy: ObjectId): void;
+  markAsPaid(transactionId: ObjectId, paidAt?: Date): void;
+  getBreakdownSummary(): { gross: number; net: number; tax: number; deductions: number };
   save(options?: { session?: ClientSession }): Promise<this>;
   toObject(): Record<string, unknown>;
 }
@@ -940,7 +1105,7 @@ export interface ProcessSalaryParams extends EmployeeOperationParams {
   /**
    * Idempotency key (Stripe-style)
    * If provided, duplicate calls with same key return cached result
-   * Auto-generated if not provided: `payroll:{orgId}:{empId}:{year}-{month}`
+   * Auto-generated if not provided: `payroll:{orgId}:{empId}:{year}-{month}:{payrollRunType}`
    */
   idempotencyKey?: string;
   /**
@@ -973,8 +1138,12 @@ export interface BulkPayrollProgress {
 
 /** Process bulk payroll parameters */
 export interface ProcessBulkPayrollParams {
-  /** Organization ID */
-  organizationId: ObjectIdLike;
+  /**
+   * Organization ID (required in multi-tenant mode).
+   * Can also be provided via context.organizationId as fallback.
+   * In single-tenant mode with autoInject, this is optional.
+   */
+  organizationId?: ObjectIdLike;
   /** Month (1-12) */
   month: number;
   /** Year */
@@ -1033,6 +1202,19 @@ export interface ProcessBulkPayrollParams {
    * - undefined/auto: Automatically use streaming for >10k employees
    */
   useStreaming?: boolean;
+  /**
+   * Maximum number of individual result entries to keep in successful/failed arrays.
+   * When exceeded, new results are counted but not stored in the arrays.
+   * Use `successCount`/`failCount` on the result for accurate totals regardless of this limit.
+   *
+   * - undefined/Infinity: Store all results (default, backward compatible)
+   * - 0: Summary only - no individual results, just counts
+   * - N: Store up to N results per array
+   *
+   * Recommended for streaming mode with large datasets to prevent OOM.
+   * @default Infinity
+   */
+  maxResultDetails?: number;
 }
 
 /** Payroll history parameters */
@@ -1067,7 +1249,14 @@ export interface PayrollSummaryParams {
   year?: number;
 }
 
-/** Export payroll parameters */
+/**
+ * Export payroll parameters
+ *
+ * Used with the two-phase export flow (v2.8.0+):
+ * - `prepareExport(params)` - Gets records without marking, returns exportId
+ * - `confirmExport({ exportId })` - Marks records after downstream confirms
+ * - `cancelExport({ exportId })` - Cancels if downstream fails
+ */
 export interface ExportPayrollParams {
   /** Organization ID */
   organizationId: ObjectIdLike;
@@ -1139,6 +1328,8 @@ export interface ReversePayrollParams {
   reason: string;
   /** Create a reversal (negative) transaction (default: true) */
   createReversalTransaction?: boolean;
+  /** Payment method for reversal transaction (default: 'manual') */
+  paymentMethod?: string;
   /** Operation context */
   context?: OperationContext;
 }
@@ -1213,6 +1404,21 @@ export interface BulkPayrollResult {
     error: string;
   }>;
   total: number;
+  /**
+   * Accurate count of successful operations, regardless of maxResultDetails.
+   * Always reflects the true number of successes even when `successful` array is capped.
+   */
+  successCount: number;
+  /**
+   * Accurate count of failed operations, regardless of maxResultDetails.
+   * Always reflects the true number of failures even when `failed` array is capped.
+   */
+  failCount: number;
+  /**
+   * Running total of all successful payment amounts, regardless of maxResultDetails.
+   * Always reflects the true sum even when `successful` array is capped.
+   */
+  totalAmount: number;
 }
 
 /** Payroll summary result */
@@ -1313,7 +1519,43 @@ export interface PayrollInstance<
 
   payrollHistory(params: PayrollHistoryParams): Promise<TPayrollRecord[]>;
   payrollSummary(params: PayrollSummaryParams): Promise<PayrollSummaryResult>;
-  exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]>;
+
+  // ========================================
+  // Two-Phase Export (v2.8.0+)
+  // ========================================
+
+  /**
+   * Prepare payroll data for export (Phase 1)
+   *
+   * Retrieves records but does NOT mark them as exported yet.
+   * Returns an exportId that must be used to confirm or cancel.
+   */
+  prepareExport(params: ExportPayrollParams): Promise<{
+    records: TPayrollRecord[];
+    exportId: string;
+    total: number;
+  }>;
+
+  /**
+   * Confirm export success (Phase 2a)
+   *
+   * Marks records as exported after downstream confirms receipt.
+   */
+  confirmExport(params: {
+    organizationId: ObjectIdLike;
+    exportId: string;
+  }): Promise<{ confirmed: number }>;
+
+  /**
+   * Cancel export (Phase 2b)
+   *
+   * Called when downstream fails. Records remain unmarked.
+   */
+  cancelExport(params: {
+    organizationId: ObjectIdLike;
+    exportId: string;
+    reason?: string;
+  }): Promise<{ cancelled: boolean }>;
 
   // ========================================
   // Void / Reversal (v2.4.0+)
@@ -1341,13 +1583,10 @@ export interface PayrollInstance<
    * Only works for voided payrolls (not reversed)
    */
   restorePayroll(params: RestorePayrollParams): Promise<RestorePayrollResult>;
-
-  /** Extended properties from plugins */
-  [key: string]: unknown;
 }
 
 /**
- * @deprecated Use `PayrollPluginDefinition` from `@classytic/payroll/core`.
+ * @deprecated Use `PayrollPluginDefinition` from `@classytic/payroll` or `@classytic/payroll/core`.
  * This legacy plugin shape is kept for compatibility with older code.
  */
 export interface PayrollPlugin {
@@ -1446,11 +1685,14 @@ export type ErrorCode =
   | 'EMPLOYEE_NOT_FOUND'
   | 'INVALID_EMPLOYEE'
   | 'DUPLICATE_PAYROLL'
+  | 'VOIDED_PAYROLL_REPROCESS'
   | 'VALIDATION_ERROR'
   | 'EMPLOYEE_TERMINATED'
   | 'ALREADY_PROCESSED'
   | 'NOT_ELIGIBLE'
-  | 'SECURITY_ERROR';
+  | 'SECURITY_ERROR'
+  | 'EXPORT_NOT_FOUND'
+  | 'EXPORT_ORG_MISMATCH';
 
 /** HTTP error with status code */
 export interface HttpError extends Error {
@@ -1707,6 +1949,14 @@ export interface TaxWithholdingDocument extends Document {
   save(options?: { session?: ClientSession }): Promise<this>;
   toObject(): Record<string, unknown>;
 }
+
+/**
+ * Tax withholding model type
+ *
+ * Re-exported from tax-withholding.model for convenience.
+ * See src/models/tax-withholding.model.ts for the full interface definition.
+ */
+export type { TaxWithholdingModel } from './models/tax-withholding.model.js';
 
 /** Parameters for querying pending tax withholdings */
 export interface GetPendingTaxParams {

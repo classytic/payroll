@@ -35,6 +35,7 @@ import type {
   EmployeeDocument,
   PayrollRecordDocument,
   AnyDocument,
+  LeaveRequestDocument,
   ObjectId,
   ObjectIdLike,
   HRMConfig,
@@ -67,8 +68,8 @@ export interface CoreModels<
  */
 export interface OptionalModels<TAttendance extends AnyDocument = AnyDocument> {
   AttendanceModel?: Model<TAttendance> | null;
-  LeaveRequestModel?: Model<any> | null;
-  TaxWithholdingModel?: Model<any> | null;
+  LeaveRequestModel?: Model<AnyDocument> | null;
+  TaxWithholdingModel?: Model<AnyDocument> | null;
 }
 
 /**
@@ -119,7 +120,7 @@ export type UpdatePayrollStatsFn<
   employee: EmployeeDocument,
   amount: number,
   paymentDate: Date,
-  repos: PayrollRepositories<TEmployee, TPayrollRecord, any, TTransaction>,
+  repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
   session?: ClientSession
 ) => Promise<void>;
 
@@ -130,7 +131,7 @@ export type GetReposForRequestFn<
   TEmployee extends EmployeeDocument = EmployeeDocument,
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TTransaction extends AnyDocument = AnyDocument,
-> = (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, any, TTransaction>;
+> = (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>;
 
 // ============================================================================
 // Manager Contexts
@@ -195,7 +196,7 @@ export interface SalaryProcessingContext<
   calculateSalaryBreakdown: (
     employee: EmployeeDocument,
     period: { month: number; year: number; startDate: Date; endDate: Date; payDate: Date },
-    input: { attendance?: any; options?: any },
+    input: { attendance?: unknown; options?: unknown },
     session?: ClientSession
   ) => Promise<import('../types.js').PayrollBreakdown>;
 }
@@ -210,7 +211,7 @@ export interface EmployeeOperationsContext<
   resolvers: {
     resolveOrganizationId: ResolveOrganizationIdFn;
     findEmployee: FindEmployeeFn<TEmployee>;
-    getReposForRequest: GetReposForRequestFn<TEmployee, any, any>;
+    getReposForRequest: GetReposForRequestFn<TEmployee>;
   };
 }
 
@@ -225,7 +226,7 @@ export interface CompensationContext<
     resolveOrganizationId: ResolveOrganizationIdFn;
     resolveEmployeeId: ResolveEmployeeIdFn;
     findEmployee: FindEmployeeFn<TEmployee>;
-    getReposForRequest: GetReposForRequestFn<TEmployee, any, any>;
+    getReposForRequest: GetReposForRequestFn<TEmployee>;
   };
 }
 

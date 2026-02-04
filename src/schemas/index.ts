@@ -356,6 +356,67 @@ export function createPayrollRecordFields(options: PayrollSchemaOptions = {}): S
     originalPayrollId: { type: Schema.Types.ObjectId },
     // TTL expiration (per-document)
     expireAt: { type: Date },
+
+    // Payroll run type (v2.8.0+)
+    payrollRunType: {
+      type: String,
+      enum: ['regular', 'off-cycle', 'supplemental', 'retroactive'],
+      default: 'regular',
+    },
+
+    // Payment frequency at time of processing (v2.9.0+)
+    // Stored for proper idempotency key reconstruction in void/reverse operations
+    paymentFrequency: {
+      type: String,
+      enum: PAYMENT_FREQUENCY_VALUES,
+      default: 'monthly',
+    },
+
+    // Retroactive adjustment details (v2.8.0+)
+    retroactiveAdjustment: {
+      type: new Schema(
+        {
+          originalPeriod: {
+            month: { type: Number, required: true, min: 1, max: 12 },
+            year: { type: Number, required: true },
+          },
+          originalPayrollId: { type: Schema.Types.ObjectId },
+          reason: { type: String, required: true },
+          adjustmentAmount: { type: Number, required: true },
+          approved: { type: Boolean },
+          approvedBy: { type: Schema.Types.ObjectId },
+          approvedAt: { type: Date },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+
+    // Employer contributions (v2.8.0+)
+    employerContributions: [
+      {
+        type: {
+          type: String,
+          enum: ['social_security', 'pension', 'unemployment', 'health_insurance', 'other'],
+          required: true,
+        },
+        amount: { type: Number, required: true },
+        description: { type: String },
+        mandatory: { type: Boolean },
+        referenceNumber: { type: String },
+      },
+    ],
+
+    // Corrections history (v2.8.0+)
+    corrections: [
+      {
+        previousAmount: { type: Number },
+        newAmount: { type: Number },
+        reason: { type: String },
+        correctedBy: { type: Schema.Types.ObjectId, ref: userRef },
+        correctedAt: { type: Date, default: Date.now },
+      },
+    ],
   };
 }
 
@@ -397,21 +458,55 @@ export const employeeIndexes = [
 
 /**
  * Recommended indexes for PayrollRecord schema
+ *
+ * Includes UNIQUE compound index on (org, employee, period, runType) with partial filter
+ * to prevent race conditions while still allowing re-processing after void/reverse.
  */
 export const payrollRecordIndexes = [
+  /**
+   * UNIQUE Compound Index (v2.9.0+) - PRIMARY duplicate protection
+   *
+   * Prevents duplicate payrolls at the database level for the same:
+   * - Organization, Employee, Period (month + year + startDate), Payroll run type
+   *
+   * The period.startDate is critical for non-monthly frequencies (weekly, bi_weekly,
+   * daily, hourly) where multiple payroll runs can occur within the same calendar month.
+   *
+   * Partial filter excludes voided records to allow re-processing.
+   * Duplicate inserts fail with E11000 → converted to DuplicatePayrollError.
+   */
   {
-    fields: { organizationId: 1, employeeId: 1, 'period.month': 1, 'period.year': 1 },
-    options: { unique: true },
+    fields: {
+      organizationId: 1,
+      employeeId: 1,
+      'period.month': 1,
+      'period.year': 1,
+      'period.startDate': 1,
+      payrollRunType: 1,
+    },
+    options: {
+      unique: true,
+      name: 'unique_payroll_per_period_startdate_runtype',
+      // Only enforce for non-voided records (uses $eq which is supported in partial indexes)
+      // When a record is voided, isVoided is set to true, excluding it from unique constraint
+      partialFilterExpression: {
+        isVoided: { $eq: false },
+      },
+    },
   },
+  // Composite index for common queries
+  { fields: { organizationId: 1, employeeId: 1, 'period.month': 1, 'period.year': 1 } },
   { fields: { organizationId: 1, 'period.year': 1, 'period.month': 1 } },
   { fields: { employeeId: 1, 'period.year': -1, 'period.month': -1 } },
   { fields: { status: 1, createdAt: -1 } },
   { fields: { organizationId: 1, status: 1, 'period.payDate': 1 } },
+  // Index for payroll run type queries (supplemental, retroactive, etc.)
+  { fields: { organizationId: 1, payrollRunType: 1, 'period.year': 1, 'period.month': 1 } },
+  // TTL index using expireAt field for per-document retention (jurisdiction-specific)
   {
-    fields: { createdAt: 1 },
+    fields: { expireAt: 1 },
     options: {
-      expireAfterSeconds: HRM_CONFIG.dataRetention.payrollRecordsTTL,
-      // TTL applies to ALL records (user handles backups/exports at app level)
+      expireAfterSeconds: 0, // Delete immediately when expireAt is reached
     },
   },
 ];

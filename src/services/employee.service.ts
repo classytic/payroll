@@ -39,11 +39,11 @@ import { HRM_CONFIG } from '../config.js';
 // Employee Service (Mongokit Refactored)
 // ============================================================================
 
-export class EmployeeService {
+export class EmployeeService<T extends EmployeeDocument = EmployeeDocument> {
   private readonly config: HRMConfig;
 
   constructor(
-    private readonly employeeRepo: Repository<EmployeeDocument>,
+    private readonly employeeRepo: Repository<T>,
     config?: HRMConfig
   ) {
     this.config = config || HRM_CONFIG;
@@ -289,12 +289,12 @@ export class EmployeeService {
     // Apply eligibility filter in-memory on docs
     const eligibleDocs = result.docs.filter((emp: EmployeeDocument) => canReceiveSalary(emp));
 
-    // Return mongokit's standard structure
+    // Return mongokit's standard structure with filtered docs
     return {
       ...result,
       docs: eligibleDocs,
       total: eligibleDocs.length, // Filtered count
-    } as any;
+    } as typeof result;
   }
 
   /**
@@ -311,7 +311,7 @@ export class EmployeeService {
     // For guest employees, need special handling to preserve partial index
     if (!params.userId) {
       // Guest employee - prepare data for insertion
-      const dataToInsert: Record<string, any> = {};
+      const dataToInsert: Record<string, unknown> = {};
 
       // Copy all fields except userId/email
       for (const [key, value] of Object.entries(employeeData)) {
@@ -355,8 +355,8 @@ export class EmployeeService {
     );
 
     logger.info('Employee status updated', {
-      employeeId: (employee as any).employeeId,
-      organizationId: (employee as any).organizationId?.toString(),
+      employeeId: employee.employeeId,
+      organizationId: employee.organizationId?.toString(),
       newStatus: status,
     });
 
@@ -384,8 +384,8 @@ export class EmployeeService {
     );
 
     logger.info('Employee compensation updated', {
-      employeeId: (employee as any).employeeId,
-      organizationId: (employee as any).organizationId?.toString(),
+      employeeId: employee.employeeId,
+      organizationId: employee.organizationId?.toString(),
     });
 
     return employee;
@@ -405,7 +405,7 @@ export class EmployeeService {
       throw new Error(`Employee not found: ${employeeId}`);
     }
 
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       status: 'terminated',
       terminatedAt: terminationDate,
     };
@@ -419,7 +419,7 @@ export class EmployeeService {
     });
 
     logger.info('Employee terminated', {
-      employeeId: (employee as any).employeeId,
+      employeeId: employee.employeeId,
       terminationDate: terminationDate.toISOString(),
     });
 
@@ -450,7 +450,7 @@ export class EmployeeService {
     );
 
     logger.info('Employee re-hired', {
-      employeeId: (employee as any).employeeId,
+      employeeId: employee.employeeId,
     });
 
     return employee;
@@ -493,11 +493,11 @@ export class EmployeeService {
 /**
  * Factory function to create EmployeeService
  */
-export function createEmployeeService(
-  employeeRepo: Repository<EmployeeDocument>,
+export function createEmployeeService<T extends EmployeeDocument = EmployeeDocument>(
+  employeeRepo: Repository<T>,
   config?: HRMConfig
-): EmployeeService {
-  return new EmployeeService(employeeRepo, config);
+): EmployeeService<T> {
+  return new EmployeeService<T>(employeeRepo, config);
 }
 
 export default EmployeeService;

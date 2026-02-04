@@ -8,6 +8,7 @@ import type {
   JurisdictionIdentifier,
   ComplianceViolation,
   EmploymentData,
+  LeaveEntitlement,
 } from '../types.js';
 import { requireJurisdiction } from '../registry.js';
 
@@ -190,7 +191,7 @@ function checkPayFrequency(
 /**
  * Check leave entitlements
  */
-function checkLeaveEntitlements(data: EmploymentData, config: any): ComplianceViolation[] {
+function checkLeaveEntitlements(data: EmploymentData, config: LeaveEntitlement): ComplianceViolation[] {
   const violations: ComplianceViolation[] = [];
 
   // Check if leave balance is negative (shouldn't happen)

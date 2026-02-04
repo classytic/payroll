@@ -4,6 +4,24 @@
  * Ensures operations are not duplicated when called with the same key.
  * Uses Stripe-style idempotency pattern for payroll operations.
  *
+ * ## Key Format (v2.9.0+)
+ *
+ * Idempotency keys support multiple payroll frequencies:
+ *
+ * **Monthly frequency:**
+ * ```
+ * payroll:{organizationId}:{employeeId}:{year}-{month}:{payrollRunType}
+ * ```
+ *
+ * **Non-monthly frequencies (weekly, bi_weekly, daily, hourly):**
+ * ```
+ * payroll:{organizationId}:{employeeId}:{year}-{month}:{startDate}:{payrollRunType}
+ * ```
+ *
+ * This allows:
+ * - Different payroll types (regular, supplemental, retroactive) in the same period
+ * - Multiple weekly/bi-weekly/daily payroll runs within the same calendar month
+ *
  * ## Important: In-Memory Cache Limitations
  *
  * This implementation uses an **in-memory LRU cache** which has the following limitations:
@@ -16,8 +34,15 @@
  * you should implement database-backed idempotency. See the Payroll class documentation
  * for implementation examples.
  *
- * The database's unique index on `{ employeeId, period.month, period.year }` serves as
- * the primary duplicate protection - this cache is a secondary optimization layer.
+ * ## Duplicate Protection (v2.9.0+)
+ *
+ * Primary duplicate protection is via **database unique compound index**:
+ * `{ organizationId, employeeId, period.month, period.year, period.startDate, payrollRunType }`
+ *
+ * This prevents race conditions under concurrent load. The partial filter
+ * excludes voided records to allow re-processing after restoration.
+ *
+ * The in-memory cache is a secondary optimization layer, not the primary protection.
  *
  * @see https://stripe.com/docs/api/idempotent_requests
  */
@@ -26,7 +51,7 @@ import { LRUCache } from 'lru-cache';
 import type { ObjectIdLike } from '../types.js';
 import { getLogger } from '../utils/logger.js';
 
-export interface IdempotentResult<T = any> {
+export interface IdempotentResult<T = unknown> {
   value: T;
   cached: boolean;
   createdAt: Date;
@@ -39,7 +64,7 @@ export interface IdempotentResult<T = any> {
  * implement database-backed idempotency instead.
  */
 export class IdempotencyManager {
-  private cache: LRUCache<string, { value: any; createdAt: Date }>;
+  private cache: LRUCache<string, { value: unknown; createdAt: Date }>;
   private static hasLoggedWarning = false;
 
   constructor(options: { max?: number; ttl?: number; suppressWarning?: boolean } = {}) {
@@ -72,7 +97,7 @@ export class IdempotencyManager {
     if (!cached) return null;
 
     return {
-      value: cached.value,
+      value: cached.value as T,
       cached: true,
       createdAt: cached.createdAt,
     };
@@ -140,13 +165,39 @@ export class IdempotencyManager {
 }
 
 /**
+ * Payroll run types for idempotency key generation
+ */
+export type PayrollRunType = 'regular' | 'off-cycle' | 'supplemental' | 'retroactive';
+
+/**
  * Generate idempotency key for payroll operations
+ *
+ * Includes payrollRunType to allow multiple payroll runs per period
+ * (e.g., regular + supplemental bonus + retroactive adjustment)
+ *
+ * For non-monthly frequencies (weekly, bi_weekly, daily, hourly), the periodStartDate
+ * is included to differentiate multiple runs within the same calendar month.
+ *
+ * @param organizationId - Organization ID
+ * @param employeeId - Employee ID
+ * @param month - Payroll month (1-12)
+ * @param year - Payroll year
+ * @param payrollRunType - Type of payroll run (default: 'regular')
+ * @param periodStartDate - Period start date (required for non-monthly frequencies)
  */
 export function generatePayrollIdempotencyKey(
   organizationId: ObjectIdLike,
   employeeId: ObjectIdLike,
   month: number,
-  year: number
+  year: number,
+  payrollRunType: PayrollRunType = 'regular',
+  periodStartDate?: Date
 ): string {
-  return `payroll:${organizationId}:${employeeId}:${year}-${month}`;
+  // For non-monthly frequencies, include the period start date to differentiate
+  // multiple runs within the same calendar month
+  if (periodStartDate) {
+    const startDateStr = periodStartDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    return `payroll:${organizationId}:${employeeId}:${year}-${month}:${startDateStr}:${payrollRunType}`;
+  }
+  return `payroll:${organizationId}:${employeeId}:${year}-${month}:${payrollRunType}`;
 }

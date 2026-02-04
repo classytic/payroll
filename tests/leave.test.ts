@@ -52,7 +52,7 @@ beforeAll(async () => {
   await mongoose.connect(mongod.getUri());
   disableLogging();
 
-  mongoose.startSession = (async () => null) as any;
+  const mockSession = { startTransaction: () => { throw new Error("Transaction numbers are only allowed on a replica set member"); }, commitTransaction: async () => {}, abortTransaction: async () => {}, endSession: () => {}, inTransaction: () => false }; mongoose.startSession = (async () => mockSession) as any;
 });
 
 afterAll(async () => {
@@ -300,10 +300,11 @@ describe('proRateAllocation', () => {
 });
 
 describe('calculateUnpaidLeaveDeduction', () => {
-  it('should calculate correct deduction', () => {
-    // 100000 / 22 days * 5 days = 22727
+  it('should calculate correct deduction with 2-decimal precision', () => {
+    // Daily rate: 100000 / 22 = 4545.45 (2-decimal precision)
+    // Deduction: 4545.45 * 5 = 22727.25
     const deduction = calculateUnpaidLeaveDeduction(100000, 5, 22);
-    expect(deduction).toBe(22727);
+    expect(deduction).toBe(22727.25);
   });
 
   it('should return 0 for zero unpaid days', () => {
@@ -818,10 +819,10 @@ describe('Leave + Payroll Integration', () => {
     const unpaidDays = getUnpaidLeaveDays(leaveRequests);
     const deduction = calculateUnpaidLeaveDeduction(baseSalary, unpaidDays, workingDaysInMonth);
 
-    // Daily rate: 100000 / 22 = 4545
-    // Deduction: 4545 * 3 = 13636
+    // Daily rate: 100000 / 22 = 4545.45 (2-decimal precision)
+    // Deduction: 4545.45 * 3 = 13636.35
     expect(unpaidDays).toBe(3);
-    expect(deduction).toBe(13636);
+    expect(deduction).toBe(13636.35);
   });
 
   it('should handle pro-rated leave for mid-year hire in payroll', () => {
@@ -1265,7 +1266,7 @@ describe('LeaveService', () => {
     });
 
     expect(totalDays).toBe(3);
-    expect(deduction).toBe(13636); // 100000 / 22 * 3 = 13636
+    expect(deduction).toBe(13636.35); // 100000 / 22 * 3 = 4545.45 * 3 = 13636.35
   });
 
   it('should get leave for payroll period', async () => {

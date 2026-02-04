@@ -13,6 +13,7 @@ import type {
   CompensationBreakdownResult,
 } from '../types.js';
 import { calculateGross, calculateNet, applyPercentage } from '../utils/calculation.js';
+import { roundMoney } from '../utils/money.js';
 import { HRM_CONFIG } from '../config.js';
 
 // ============================================================================
@@ -256,7 +257,7 @@ export class CompensationFactory {
 
     return this.updateBaseAmount(
       compensation,
-      Math.round(newBaseAmount),
+      roundMoney(newBaseAmount, 2),
       params.effectiveFrom
     );
   }

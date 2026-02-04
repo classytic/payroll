@@ -11,6 +11,8 @@ import type {
   LeaveSummaryResult,
   WorkingDaysOptions,
 } from '../types.js';
+import { diffInDays, toUTCDateString } from './date.js';
+import { roundMoney } from './money.js';
 
 // ============================================================================
 // Default Configurations
@@ -67,7 +69,7 @@ export function calculateLeaveDays(
     includeEndDate = true,
   } = options;
 
-  const holidaySet = new Set(holidays.map((d) => new Date(d).toDateString()));
+  const holidaySet = new Set(holidays.map((d) => toUTCDateString(d)));
 
   let count = 0;
   const current = new Date(startDate);
@@ -82,7 +84,7 @@ export function calculateLeaveDays(
 
   while (current <= end) {
     const isWorkDay = workingDays.includes(current.getDay());
-    const isHoliday = holidaySet.has(current.toDateString());
+    const isHoliday = holidaySet.has(toUTCDateString(current));
 
     if (isWorkDay && !isHoliday) {
       count++;
@@ -311,8 +313,8 @@ export function calculateUnpaidLeaveDeduction(
 ): number {
   if (unpaidDays <= 0 || workingDaysInMonth <= 0) return 0;
 
-  const dailyRate = baseSalary / workingDaysInMonth;
-  return Math.round(dailyRate * unpaidDays);
+  const dailyRate = roundMoney(baseSalary / workingDaysInMonth, 2);
+  return roundMoney(dailyRate * unpaidDays, 2);
 }
 
 /**
@@ -412,21 +414,6 @@ export function accrueLeaveToBalance(
   }
 
   return balances;
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Calculate difference in days between two dates
- */
-function diffInDays(start: Date, end: Date): number {
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  startDate.setHours(0, 0, 0, 0);
-  endDate.setHours(0, 0, 0, 0);
-  return Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 // ============================================================================

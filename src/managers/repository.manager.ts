@@ -46,9 +46,9 @@ export interface RequestScopedServices<
   TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
   TLeaveRequest extends LeaveRequestDocument = LeaveRequestDocument
 > {
-  employee: EmployeeService;
-  payroll: PayrollService;
-  compensation: CompensationService;
+  employee: EmployeeService<TEmployee>;
+  payroll: PayrollService<TPayrollRecord, TEmployee>;
+  compensation: CompensationService<TEmployee>;
 }
 
 /**
@@ -156,12 +156,12 @@ export class RepositoryManager<
     _session?: ClientSession // TODO(@classytic/payroll): Session support for service-level transactions
   ): RequestScopedServices<TEmployee, TPayrollRecord, TLeaveRequest> {
     const repos = this.getReposForRequest(organizationId);
-    const employeeService = createEmployeeService(repos.employee as any);
+    const employeeService = createEmployeeService(repos.employee);
 
     return {
       employee: employeeService,
-      payroll: createPayrollService(repos.payrollRecord as any, employeeService),
-      compensation: createCompensationService(repos.employee as any),
+      payroll: createPayrollService(repos.payrollRecord, employeeService),
+      compensation: createCompensationService(repos.employee),
     };
   }
 

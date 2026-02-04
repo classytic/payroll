@@ -21,7 +21,7 @@ describe('Employee ID Mode Resolution', () => {
     mongoServer = await MongoMemoryServer.create();
     await mongoose.connect(mongoServer.getUri());
 
-    mongoose.startSession = (async () => null) as any;
+    const mockSession = { startTransaction: () => { throw new Error("Transaction numbers are only allowed on a replica set member"); }, commitTransaction: async () => {}, abortTransaction: async () => {}, endSession: () => {}, inTransaction: () => false }; mongoose.startSession = (async () => mockSession) as any;
 
     const userSchema = new mongoose.Schema({ name: String, email: String });
     mongoose.model('User', userSchema);

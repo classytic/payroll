@@ -7,6 +7,7 @@
 
 import type { PayrollInstance } from '../types.js';
 import type { EventBus, PayrollEventType, PayrollEventMap } from './events.js';
+import { getLogger } from '../utils/logger.js';
 
 // ============================================================================
 // Plugin Context
@@ -157,8 +158,13 @@ export class PluginManager {
           for (const errorHandler of errorHandlers) {
             try {
               await (errorHandler as PluginHooks['onError'])!(error as Error, hookName);
-            } catch {
-              // Ignore errors in error handlers
+            } catch (handlerError) {
+              // Ignore errors in error handlers to prevent infinite loops
+              // But log at debug level for troubleshooting
+              getLogger().debug('Error handler threw an error', {
+                hook: hookName,
+                handlerError: handlerError instanceof Error ? handlerError.message : String(handlerError),
+              });
             }
           }
         }
@@ -230,7 +236,9 @@ export const loggingPlugin = definePlugin({
   },
   hooks: {
     onError: (error, context) => {
-      console.error(`[Payroll Error] ${context}:`, error.message);
+      // Logger not available in hook context, this is a static error handler
+      // Use getLogger() for consistent logging
+      getLogger().error(`[Payroll Error] ${context}:`, { error: error.message });
     },
   },
 });

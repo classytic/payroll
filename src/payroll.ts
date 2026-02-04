@@ -4,33 +4,50 @@
  * Clean, Stripe-like API for payroll management
  * Builder pattern for configuration
  *
- * ## Idempotency & Duplicate Protection
+ * ## Idempotency & Duplicate Protection (v2.8.0+)
  *
  * The package implements multi-layer duplicate protection:
  *
- * ### 1. Database-Level Protection (PRIMARY)
- * - Unique index on `{ employeeId, period.month, period.year }` prevents duplicate payroll records
- * - MongoDB will reject duplicate inserts with E11000 error
- * - This works across server restarts and multiple instances
+ * ### 1. Database-Level Unique Index (PRIMARY)
+ * - Unique compound index on `{ organizationId, employeeId, period.month, period.year, payrollRunType }`
+ * - Prevents race conditions: concurrent requests get E11000 duplicate key error
+ * - Partial filter excludes voided/reversed records (allows re-processing)
+ * - Works across server restarts and multiple instances
  *
- * ### 2. Application-Level Idempotency (SECONDARY)
- * - In-memory idempotency cache using `IdempotencyManager`
+ * ### 2. Application-Level Duplicate Check (SECONDARY)
+ * - Queries existing records before insert for better error messages
+ * - Throws `DuplicatePayrollError` if a record exists
+ * - Allows multiple payroll types per period (regular, supplemental, retroactive, off-cycle)
+ *
+ * ### 3. In-Memory Idempotency Cache (TERTIARY)
+ * - Uses `IdempotencyManager` with LRU cache
  * - Stores results for 24 hours by default
- * - Auto-generated keys: `payroll:{orgId}:{empId}:{year}-{month}`
+ * - Auto-generated keys include run type: `payroll:{orgId}:{empId}:{year}-{month}:{runType}`
  * - Custom keys supported via `idempotencyKey` parameter
  *
- * ### Idempotency Limitations
+ * ### Idempotency Key Format (v2.8.0+)
  *
- * **IMPORTANT:** The in-memory cache is process-local only:
+ * ```
+ * payroll:{organizationId}:{employeeId}:{year}-{month}:{payrollRunType}
+ * ```
+ *
+ * Example: `payroll:org123:emp456:2024-3:regular`
+ *
+ * This allows processing multiple payroll types in the same period:
+ * - `payroll:org123:emp456:2024-3:regular` (monthly salary)
+ * - `payroll:org123:emp456:2024-3:supplemental` (bonus)
+ * - `payroll:org123:emp456:2024-3:retroactive` (backpay adjustment)
+ *
+ * ### In-Memory Cache Limitations
+ *
+ * **Note:** The in-memory cache (layer 3) is process-local only:
  * - Does NOT persist across server restarts
  * - Does NOT work across multiple server instances (horizontal scaling)
  * - Only prevents duplicates within the same process lifetime
  *
- * After a restart or in a multi-instance deployment, the database unique index
- * is your primary protection. Duplicate requests will fail with:
- * ```
- * MongoServerError: E11000 duplicate key error collection: payroll_records
- * ```
+ * However, the **database unique index (layer 1)** provides full protection
+ * across restarts and multiple instances. Concurrent/duplicate requests
+ * receive E11000 errors which are automatically handled.
  *
  * ### Implementing DB-Backed Idempotency (Recommended for Production)
  *
@@ -44,8 +61,9 @@
  *   createdAt: { type: Date, default: Date.now, expires: 3600 }, // 1 hour TTL
  * }));
  *
- * // 2. Check before processing
- * const key = `payroll:${orgId}:${empId}:${year}-${month}`;
+ * // 2. Check before processing (include runType in key!)
+ * const runType = params.payrollRunType || 'regular';
+ * const key = `payroll:${orgId}:${empId}:${year}-${month}:${runType}`;
  * const existing = await IdempotencyKey.findOne({ key });
  * if (existing) return existing.result;
  *
@@ -58,20 +76,21 @@
  * ### Handling Duplicate Errors
  *
  * When a duplicate payroll is detected:
- * - Query the existing payroll record
+ * - The package throws `DuplicatePayrollError`
+ * - Query the existing payroll record (include payrollRunType!)
  * - Return it to the caller
- * - Log for monitoring/alerting
  *
  * ```typescript
  * try {
  *   return await payroll.processSalary(params);
  * } catch (error) {
- *   if (error.code === 11000) {
+ *   if (error instanceof DuplicatePayrollError) {
  *     // Duplicate - fetch and return existing
  *     const existing = await PayrollRecord.findOne({
  *       employeeId: params.employeeId,
  *       'period.month': params.month,
  *       'period.year': params.year,
+ *       payrollRunType: params.payrollRunType || 'regular',
  *     });
  *     return existing;
  *   }
@@ -124,6 +143,8 @@ import type {
   TaxSummaryResult,
   MarkTaxPaidParams,
   OperationContext,
+  AnyModel,
+  TaxWithholdingModel,
   // Void / Reversal types (v2.4.0+)
   VoidPayrollParams,
   ReversePayrollParams,
@@ -149,8 +170,9 @@ import { createPayrollTransaction } from './factories/transaction.factory.js';
 import { TAX_BRACKETS } from './config.js';
 import { payroll as payrollQuery, toObjectId, isValidObjectId } from './utils/query-builders.js';
 import type { SecureEmployeeLookupOptions } from './utils/employee-lookup.js';
-import { getPayPeriod, addMonths } from './utils/date.js';
+import { getPayPeriod, addMonths, addDays } from './utils/date.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions, applyTaxBrackets } from './utils/calculation.js';
+import { roundMoney } from './utils/money.js';
 import { getLogger, setLogger } from './utils/logger.js';
 import { NotInitializedError, EmployeeNotFoundError, DuplicatePayrollError, NotEligibleError, EmployeeTerminatedError, ValidationError, SecurityError, PayrollError } from './errors/index.js';
 import { countWorkingDays, type AttendanceInput, type PayrollProcessingOptions } from './core/config.js';
@@ -199,7 +221,6 @@ export class Payroll<
   TTransaction extends AnyDocument = AnyDocument,
   TAttendance extends AnyDocument = AnyDocument,
 > implements PayrollInstance<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
-  [key: string]: unknown;
   private _container: Container<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
   private _events: EventBus;
   private _plugins: PluginManager | null = null;
@@ -210,8 +231,8 @@ export class Payroll<
   private repositoryManager!: RepositoryManager<TEmployee, TPayrollRecord, TTransaction>;
   private salaryProcessingManager!: SalaryProcessingManager<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
   private bulkOperationsManager!: BulkOperationsManager<TEmployee, TPayrollRecord, TTransaction, TAttendance>;
-  private employeeOperationsManager!: EmployeeOperationsManager<TEmployee>;
-  private compensationManager!: CompensationManager<TEmployee>;
+  private employeeOperationsManager!: EmployeeOperationsManager<TEmployee, TPayrollRecord, TTransaction>;
+  private compensationManager!: CompensationManager<TEmployee, TPayrollRecord, TTransaction>;
   private payrollHistoryManager!: PayrollHistoryManager<TEmployee, TPayrollRecord, TTransaction>;
   private payrollStateManager!: PayrollStateManager<TPayrollRecord, TTransaction>;
 
@@ -267,8 +288,11 @@ export class Payroll<
       logger: customLogger,
     });
 
+    // Generic bridge: Container's attendance type param doesn't affect manager behavior
+    const containerBase = this._container as unknown as Container<TEmployee, TPayrollRecord, TTransaction, AnyDocument>;
+
     // Initialize repository manager
-    this.repositoryManager = createRepositoryManager(
+    this.repositoryManager = createRepositoryManager<TEmployee, TPayrollRecord, TTransaction>(
       {
         EmployeeModel,
         PayrollRecordModel,
@@ -276,33 +300,33 @@ export class Payroll<
         LeaveRequestModel: config.LeaveRequestModel ?? null,
         TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
-      this._container as any
-    ) as any;
+      containerBase
+    ) as RepositoryManager<TEmployee, TPayrollRecord, TTransaction>;
 
     // Initialize salary processing manager
-    this.salaryProcessingManager = createSalaryProcessingManager(
+    this.salaryProcessingManager = createSalaryProcessingManager<TEmployee, TPayrollRecord, TTransaction, TAttendance>(
       {
         EmployeeModel,
         PayrollRecordModel,
         TransactionModel,
         AttendanceModel: AttendanceModel ?? null,
-        LeaveRequestModel: config.LeaveRequestModel ?? null,
-        TaxWithholdingModel: config.TaxWithholdingModel ?? null,
+        LeaveRequestModel: (config.LeaveRequestModel as Model<LeaveRequestDocument> | null | undefined) ?? null,
+        TaxWithholdingModel: (config.TaxWithholdingModel as unknown as TaxWithholdingModel | null) ?? null,
       },
-      this._container as any,
+      this._container,
       this._events,
       this._idempotency,
-      this.repositoryManager as any,
+      this.repositoryManager as unknown as RepositoryManager<TEmployee, TPayrollRecord, TTransaction>,
       this.calculateSalaryBreakdown.bind(this),
       this.resolveOrganizationId.bind(this),
       this.resolveEmployeeId.bind(this),
       this.findEmployee.bind(this),
       this.updatePayrollStats.bind(this),
       this.config
-    ) as any;
+    );
 
     // Initialize bulk operations manager
-    this.bulkOperationsManager = createBulkOperationsManager(
+    this.bulkOperationsManager = createBulkOperationsManager<TEmployee, TPayrollRecord, TTransaction, TAttendance>(
       {
         EmployeeModel,
         PayrollRecordModel,
@@ -310,39 +334,36 @@ export class Payroll<
         AttendanceModel: AttendanceModel ?? null,
       },
       this._events,
-      this.processSalary.bind(this)
-    ) as any;
+      this.processSalary.bind(this),
+      this.resolveOrganizationId.bind(this)
+    );
 
     // Initialize employee operations manager
-    this.employeeOperationsManager = createEmployeeOperationsManager(
+    this.employeeOperationsManager = createEmployeeOperationsManager<TEmployee, TPayrollRecord, TTransaction>(
       this._events,
       this.config,
       this.resolveOrganizationId.bind(this),
       this.findEmployee.bind(this),
-      (orgId) => this.repositoryManager.getReposForRequest(orgId) as any,
-      (repos: any) => {
-        // Get organizationId from the first repo's model (they all have the same orgId)
-        const orgId = repos.employee ? repos.employee._organizationId : undefined;
+      (orgId) => this.repositoryManager.getReposForRequest(orgId) as PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+      (repos) => {
         return this.getServicesForRequest(repos);
       }
-    ) as any;
+    );
 
     // Initialize compensation manager
-    this.compensationManager = createCompensationManager(
+    this.compensationManager = createCompensationManager<TEmployee, TPayrollRecord, TTransaction>(
       this._events,
       this.resolveOrganizationId.bind(this),
       this.resolveEmployeeId.bind(this),
       this.findEmployee.bind(this),
-      (orgId) => this.repositoryManager.getReposForRequest(orgId) as any,
-      (repos: any) => {
-        // Get organizationId from the first repo's model (they all have the same orgId)
-        const orgId = repos.employee ? repos.employee._organizationId : undefined;
+      (orgId) => this.repositoryManager.getReposForRequest(orgId) as PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+      (repos) => {
         return this.getServicesForRequest(repos);
       }
-    ) as any;
+    );
 
     // Initialize payroll history manager
-    this.payrollHistoryManager = createPayrollHistoryManager(
+    this.payrollHistoryManager = createPayrollHistoryManager<TEmployee, TPayrollRecord, TTransaction>(
       {
         EmployeeModel,
         PayrollRecordModel,
@@ -351,17 +372,17 @@ export class Payroll<
       this._events,
       this.resolveOrganizationId.bind(this),
       this.findEmployee.bind(this)
-    ) as any;
+    );
 
     // Initialize payroll state manager
-    this.payrollStateManager = createPayrollStateManager(
+    this.payrollStateManager = createPayrollStateManager<TPayrollRecord, TTransaction>(
       {
         PayrollRecordModel,
         TransactionModel,
         TaxWithholdingModel: config.TaxWithholdingModel ?? null,
       },
       this._events
-    ) as any;
+    );
 
     // Setup plugin manager
     const pluginContext: PluginContext = {
@@ -467,15 +488,15 @@ export class Payroll<
    * @param repos - Request-scoped repositories
    */
   private getServicesForRequest(
-    repos: PayrollRepositories<TEmployee, TPayrollRecord, any, TTransaction>
+    repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>
   ): {
-    employee: EmployeeService;
-    payroll: PayrollService;
-    compensation: CompensationService;
+    employee: EmployeeService<TEmployee>;
+    payroll: PayrollService<TPayrollRecord, TEmployee>;
+    compensation: CompensationService<TEmployee>;
   } {
-    const employeeService = createEmployeeService(repos.employee as any, this.config);
-    const payrollService = createPayrollService(repos.payrollRecord as any, employeeService);
-    const compensationService = createCompensationService(repos.employee as any);
+    const employeeService = createEmployeeService(repos.employee, this.config);
+    const payrollService = createPayrollService(repos.payrollRecord, employeeService);
+    const compensationService = createCompensationService(repos.employee);
 
     return {
       employee: employeeService,
@@ -502,8 +523,8 @@ export class Payroll<
    */
   private getReposForRequest(
     organizationId: ObjectId
-  ): PayrollRepositories<TEmployee, TPayrollRecord, any, TTransaction> {
-    return this.repositoryManager.getReposForRequest(organizationId) as any;
+  ): PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction> {
+    return this.repositoryManager.getReposForRequest(organizationId) as PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>;
   }
 
   /**
@@ -887,6 +908,7 @@ export class Payroll<
 
         case 'any': {
           // Try all modes: userId → employeeId → email
+          // Only swallow EmployeeNotFoundError - propagate operational errors (DB failures, timeouts)
           const anyModes: Array<import('./types.js').EmployeeIdentityMode> = ['userId', 'employeeId', 'email'];
           for (const tryMode of anyModes) {
             try {
@@ -897,8 +919,12 @@ export class Payroll<
                 populateUser,
                 session
               });
-            } catch {
-              // Continue to next mode
+            } catch (modeError) {
+              // Only suppress "not found" errors - propagate real operational failures
+              if (modeError instanceof EmployeeNotFoundError) {
+                continue; // Expected: employee not found with this mode, try next
+              }
+              throw modeError; // DB connection, timeout, or other operational error
             }
           }
           break;
@@ -1088,14 +1114,6 @@ export class Payroll<
     return this.payrollHistoryManager.payrollSummary(params);
   }
 
-  /**
-   * Export payroll data
-   */
-  async exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]> {
-    this.ensureInitialized();
-    return this.payrollHistoryManager.exportPayroll(params);
-  }
-
   // ========================================
   // Void / Reversal Methods (v2.4.0+)
   // ========================================
@@ -1118,7 +1136,27 @@ export class Payroll<
    */
   async voidPayroll(params: VoidPayrollParams): Promise<VoidPayrollResult> {
     this.ensureInitialized();
-    return this.payrollStateManager.voidPayroll(params);
+    const result = await this.payrollStateManager.voidPayroll(params);
+
+    // Clear idempotency cache to allow re-processing if needed
+    // (voided payrolls block re-processing, but cache should be cleared for consistency)
+    // IMPORTANT: Must include payrollRunType and period.startDate for non-monthly frequencies
+    const { employeeId, period, organizationId, payrollRunType = 'regular', paymentFrequency = 'monthly' } = result.payrollRecord;
+
+    // For non-monthly frequencies, include period.startDate in idempotency key
+    // Use stored paymentFrequency (not date heuristics) for reliable detection
+    const isNonMonthly = paymentFrequency !== 'monthly';
+    const idempotencyKey = generatePayrollIdempotencyKey(
+      organizationId,
+      employeeId,
+      period.month,
+      period.year,
+      payrollRunType as import('./core/idempotency.js').PayrollRunType,
+      isNonMonthly ? period.startDate : undefined
+    );
+    this._idempotency.delete(idempotencyKey);
+
+    return result;
   }
 
   /**
@@ -1139,7 +1177,27 @@ export class Payroll<
    */
   async reversePayroll(params: ReversePayrollParams): Promise<ReversePayrollResult> {
     this.ensureInitialized();
-    return this.payrollStateManager.reversePayroll(params);
+    const result = await this.payrollStateManager.reversePayroll(params);
+
+    // Clear idempotency cache to allow re-processing after reversal
+    // Reversed payrolls should allow creating a new record for the same period
+    // IMPORTANT: Must include payrollRunType and period.startDate for non-monthly frequencies
+    const { employeeId, period, organizationId, payrollRunType = 'regular', paymentFrequency = 'monthly' } = result.payrollRecord;
+
+    // For non-monthly frequencies, include period.startDate in idempotency key
+    // Use stored paymentFrequency (not date heuristics) for reliable detection
+    const isNonMonthly = paymentFrequency !== 'monthly';
+    const idempotencyKey = generatePayrollIdempotencyKey(
+      organizationId,
+      employeeId,
+      period.month,
+      period.year,
+      payrollRunType as import('./core/idempotency.js').PayrollRunType,
+      isNonMonthly ? period.startDate : undefined
+    );
+    this._idempotency.delete(idempotencyKey);
+
+    return result;
   }
 
   /**
@@ -1176,7 +1234,7 @@ export class Payroll<
     }
 
     const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
-    const service = new TaxWithholdingService(this.models.TaxWithholdingModel);
+    const service = new TaxWithholdingService(this.models.TaxWithholdingModel as unknown as TaxWithholdingModel);
 
     return service.getPending(params);
   }
@@ -1192,7 +1250,7 @@ export class Payroll<
     }
 
     const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
-    const service = new TaxWithholdingService(this.models.TaxWithholdingModel);
+    const service = new TaxWithholdingService(this.models.TaxWithholdingModel as unknown as TaxWithholdingModel);
 
     return service.getSummary(params);
   }
@@ -1205,7 +1263,7 @@ export class Payroll<
    */
   async markTaxWithholdingsPaid(params: MarkTaxPaidParams): Promise<{
     withholdings: TaxWithholdingDocument[];
-    transaction?: any;
+    transaction?: AnyDocument;
   }> {
     this.ensureInitialized();
 
@@ -1215,8 +1273,8 @@ export class Payroll<
 
     const { TaxWithholdingService } = await import('./services/tax-withholding.service.js');
     const service = new TaxWithholdingService(
-      this.models.TaxWithholdingModel,
-      this.models.TransactionModel as any,
+      this.models.TaxWithholdingModel as unknown as TaxWithholdingModel,
+      this.models.TransactionModel as AnyModel,
       this._events
     );
 
@@ -1300,52 +1358,11 @@ export class Payroll<
     });
   }
 
-  /**
-   * Calculate attendance deduction using working days (not calendar days)
-   */
-  private async calculateAttendanceDeduction(
-    employeeId: mongoose.Types.ObjectId,
-    organizationId: mongoose.Types.ObjectId,
-    period: { month: number; year: number; startDate: Date; endDate: Date },
-    dailyRate: number,
-    expectedWorkingDays: number,
-    session?: ClientSession
-  ): Promise<number> {
-    try {
-      if (!this.models.AttendanceModel) return 0;
-
-      let query = this.models.AttendanceModel.findOne({
-        organizationId: organizationId,
-        targetId: employeeId,
-        targetModel: 'Employee',
-        year: period.year,
-        month: period.month,
-      });
-      if (session) query = query.session(session);
-
-      const attendance = await query;
-      if (!attendance) return 0;
-
-      const workedDays = (attendance as { totalWorkDays?: number }).totalWorkDays || 0;
-      
-      // Calculate absent days based on expected working days (not calendar days)
-      const absentDays = Math.max(0, expectedWorkingDays - workedDays);
-
-      return Math.round(absentDays * dailyRate);
-    } catch (error) {
-      getLogger().warn('Failed to calculate attendance deduction', {
-        employeeId: employeeId.toString(),
-        error: (error as Error).message,
-      });
-      return 0;
-    }
-  }
-
   private async updatePayrollStats(
     employee: EmployeeDocument,
     amount: number,
     paymentDate: Date,
-    repos: PayrollRepositories<TEmployee, TPayrollRecord, any, TTransaction>,
+    repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
     session?: ClientSession
   ): Promise<void> {
     if (!employee.payrollStats) {
@@ -1359,10 +1376,29 @@ export class Payroll<
     employee.payrollStats.totalPaid = (employee.payrollStats.totalPaid || 0) + amount;
     employee.payrollStats.lastPaymentDate = paymentDate;
     employee.payrollStats.paymentsThisYear = (employee.payrollStats.paymentsThisYear || 0) + 1;
-    employee.payrollStats.averageMonthly = Math.round(
-      employee.payrollStats.totalPaid / employee.payrollStats.paymentsThisYear
+    employee.payrollStats.averageMonthly = roundMoney(
+      employee.payrollStats.totalPaid / employee.payrollStats.paymentsThisYear, 2
     );
-    employee.payrollStats.nextPaymentDate = addMonths(paymentDate, 1);
+
+    // Calculate next payment date based on payment frequency
+    const frequency = employee.compensation?.frequency || 'monthly';
+    switch (frequency) {
+      case 'hourly':
+      case 'daily':
+        // Daily/hourly workers typically get paid daily
+        employee.payrollStats.nextPaymentDate = addDays(paymentDate, 1);
+        break;
+      case 'weekly':
+        employee.payrollStats.nextPaymentDate = addDays(paymentDate, 7);
+        break;
+      case 'bi_weekly':
+        employee.payrollStats.nextPaymentDate = addDays(paymentDate, 14);
+        break;
+      case 'monthly':
+      default:
+        employee.payrollStats.nextPaymentDate = addMonths(paymentDate, 1);
+        break;
+    }
 
     // Use repository update instead of document.save()
     await repos.employee.update(
@@ -1370,6 +1406,279 @@ export class Payroll<
       { payrollStats: employee.payrollStats },
       { session }
     );
+  }
+
+  // ========================================
+  // Crash Recovery Methods (v2.8.0+)
+  // ========================================
+
+  /**
+   * Recover stuck payroll records
+   *
+   * Finds payroll records stuck in 'processing' or 'pending' status for longer
+   * than the threshold and handles them appropriately:
+   * - Records WITHOUT transactionId: Marked as 'failed' (safe to retry)
+   * - Records WITH transactionId: Flagged for manual review (orphaned transaction)
+   *
+   * This helps recover from server crashes or partial failures.
+   *
+   * @example
+   * ```typescript
+   * const recovered = await payroll.recoverStuckPayrolls({
+   *   organizationId: org._id,
+   *   staleThresholdMinutes: 30,
+   * });
+   * console.log(`Recovered ${recovered.markedFailed} records`);
+   * if (recovered.requiresManualReview.length > 0) {
+   *   console.warn('Manual review needed:', recovered.requiresManualReview);
+   * }
+   * ```
+   */
+  async recoverStuckPayrolls(params: {
+    organizationId: ObjectIdLike;
+    staleThresholdMinutes?: number;
+    dryRun?: boolean;
+  }): Promise<{
+    markedFailed: number;
+    requiresManualReview: Array<{ _id: ObjectId; status: string; transactionId?: ObjectId }>;
+    scanned: number;
+  }> {
+    this.ensureInitialized();
+
+    const orgId = this.resolveOrganizationId(params.organizationId);
+    const threshold = params.staleThresholdMinutes ?? 30;
+    const cutoffTime = new Date(Date.now() - threshold * 60 * 1000);
+    const dryRun = params.dryRun ?? false;
+
+    // Find stuck records
+    const stuckRecords = await this.models.PayrollRecordModel.find({
+      organizationId: orgId,
+      status: { $in: ['processing', 'pending'] },
+      processedAt: { $lt: cutoffTime },
+    });
+
+    const result = {
+      markedFailed: 0,
+      requiresManualReview: [] as Array<{ _id: ObjectId; status: string; transactionId?: ObjectId }>,
+      scanned: stuckRecords.length,
+    };
+
+    for (const record of stuckRecords) {
+      if (record.transactionId) {
+        // Has transaction - needs manual review (don't auto-mark to prevent orphaning)
+        result.requiresManualReview.push({
+          _id: record._id,
+          status: record.status,
+          transactionId: record.transactionId,
+        });
+        getLogger().warn('Stuck payroll record with transaction needs manual review', {
+          payrollRecordId: record._id.toString(),
+          status: record.status,
+          transactionId: record.transactionId.toString(),
+          processedAt: record.processedAt,
+        });
+      } else {
+        // No transaction - safe to mark as failed
+        if (!dryRun) {
+          await this.models.PayrollRecordModel.updateOne(
+            { _id: record._id },
+            { $set: { status: 'failed' } }
+          );
+        }
+        result.markedFailed++;
+        getLogger().info('Marked stuck payroll record as failed', {
+          payrollRecordId: record._id.toString(),
+          status: record.status,
+          processedAt: record.processedAt,
+          dryRun,
+        });
+      }
+    }
+
+    getLogger().info('Crash recovery completed', {
+      organizationId: orgId.toString(),
+      scanned: result.scanned,
+      markedFailed: result.markedFailed,
+      requiresManualReview: result.requiresManualReview.length,
+      dryRun,
+    });
+
+    return result;
+  }
+
+  // ========================================
+  // Two-Phase Export Methods (v2.8.0+)
+  // ========================================
+
+  /**
+   * Prepare payroll data for export (Phase 1)
+   *
+   * Retrieves records but does NOT mark them as exported yet.
+   * Returns an exportId that must be used to confirm or cancel the export.
+   *
+   * @example
+   * ```typescript
+   * // Phase 1: Prepare
+   * const { records, exportId } = await payroll.prepareExport({
+   *   organizationId: org._id,
+   *   startDate: new Date('2024-01-01'),
+   *   endDate: new Date('2024-01-31'),
+   * });
+   *
+   * // Send records to external system...
+   *
+   * // Phase 2: Confirm (if successful) or Cancel (if failed)
+   * await payroll.confirmExport({ organizationId: org._id, exportId });
+   * ```
+   */
+  async prepareExport(params: ExportPayrollParams): Promise<{
+    records: TPayrollRecord[];
+    exportId: string;
+    total: number;
+  }> {
+    this.ensureInitialized();
+
+    const orgId = this.resolveOrganizationId(params.organizationId);
+    const { startDate, endDate } = params;
+
+    const query = {
+      organizationId: toObjectId(orgId),
+      'period.payDate': { $gte: startDate, $lte: endDate },
+    };
+
+    const records = await this.models.PayrollRecordModel.find(query)
+      .populate('employeeId', 'employeeId position department')
+      .populate('userId', 'name email')
+      .populate('transactionId', 'amount method status date')
+      .sort({ 'period.year': -1, 'period.month': -1 });
+
+    // Generate export ID for tracking
+    const exportId = `export-${orgId}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+    // Store pending export info in idempotency cache (temporary storage)
+    this._idempotency.set(`pending-export:${exportId}`, {
+      organizationId: orgId.toString(),
+      recordIds: records.map(r => r._id.toString()),
+      createdAt: new Date(),
+      startDate,
+      endDate,
+    });
+
+    getLogger().info('Prepared payroll export', {
+      organizationId: orgId.toString(),
+      exportId,
+      recordCount: records.length,
+      dateRange: { start: startDate, end: endDate },
+    });
+
+    return {
+      records: records as unknown as TPayrollRecord[],
+      exportId,
+      total: records.length,
+    };
+  }
+
+  /**
+   * Confirm export success (Phase 2a)
+   *
+   * Marks records as exported after downstream system confirms receipt.
+   */
+  async confirmExport(params: {
+    organizationId: ObjectIdLike;
+    exportId: string;
+  }): Promise<{ confirmed: number }> {
+    this.ensureInitialized();
+
+    const orgId = this.resolveOrganizationId(params.organizationId);
+    const { exportId } = params;
+
+    // Retrieve pending export info
+    const pendingExport = this._idempotency.get<{
+      organizationId: string;
+      recordIds: string[];
+      createdAt: Date;
+    }>(`pending-export:${exportId}`);
+
+    if (!pendingExport) {
+      throw new PayrollError(
+        `Export ${exportId} not found or already processed`,
+        'EXPORT_NOT_FOUND',
+        404,
+        { exportId }
+      );
+    }
+
+    // Verify organization match
+    if (pendingExport.value.organizationId !== orgId.toString()) {
+      throw new PayrollError(
+        'Organization mismatch for export confirmation',
+        'EXPORT_ORG_MISMATCH',
+        403,
+        { exportId, expectedOrg: pendingExport.value.organizationId }
+      );
+    }
+
+    const recordIds = pendingExport.value.recordIds.map(id => toObjectId(id));
+
+    // Mark records as exported
+    const result = await this.models.PayrollRecordModel.updateMany(
+      { _id: { $in: recordIds }, organizationId: orgId },
+      { $set: { exported: true, exportedAt: new Date() } }
+    );
+
+    // Clear pending export
+    this._idempotency.delete(`pending-export:${exportId}`);
+
+    // Emit event
+    this._events.emitSync('payroll:exported', {
+      organizationId: orgId,
+      exportId,
+      recordCount: result.modifiedCount,
+      format: 'json',
+    });
+
+    getLogger().info('Confirmed payroll export', {
+      organizationId: orgId.toString(),
+      exportId,
+      confirmed: result.modifiedCount,
+    });
+
+    return { confirmed: result.modifiedCount ?? 0 };
+  }
+
+  /**
+   * Cancel export (Phase 2b)
+   *
+   * Called when downstream system fails to process the export.
+   * Records remain unmarked and can be exported again.
+   */
+  async cancelExport(params: {
+    organizationId: ObjectIdLike;
+    exportId: string;
+    reason?: string;
+  }): Promise<{ cancelled: boolean }> {
+    this.ensureInitialized();
+
+    const orgId = this.resolveOrganizationId(params.organizationId);
+    const { exportId, reason } = params;
+
+    // Just clear the pending export - records were never marked
+    const pendingExport = this._idempotency.get(`pending-export:${exportId}`);
+
+    if (!pendingExport) {
+      getLogger().warn('Export cancellation for unknown export', { exportId });
+      return { cancelled: false };
+    }
+
+    this._idempotency.delete(`pending-export:${exportId}`);
+
+    getLogger().info('Cancelled payroll export', {
+      organizationId: orgId.toString(),
+      exportId,
+      reason,
+    });
+
+    return { cancelled: true };
   }
 
   // ========================================
@@ -1546,7 +1855,7 @@ export class PayrollBuilder<
       config: this._config,
       singleTenant: this._singleTenant,
       logger: this._logger,
-    } as any);
+    } as PayrollInitConfig<TEmployee, TPayrollRecord, TTransaction, TAttendance>);
 
     return payroll;
   }

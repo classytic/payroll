@@ -17,7 +17,6 @@ import type {
   PayrollHistoryParams,
   PayrollSummaryParams,
   PayrollSummaryResult,
-  ExportPayrollParams,
 } from '../types.js';
 import { getLogger } from '../utils/logger.js';
 import { payroll as payrollQuery, toObjectId } from '../utils/query-builders.js';
@@ -78,7 +77,7 @@ export class PayrollHistoryManager<
     },
     private readonly events: EventBus,
     private readonly resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-    private readonly findEmployeeFn: (params: any) => Promise<TEmployee>
+    private readonly findEmployeeFn: import('./context.js').FindEmployeeFn<TEmployee>
   ) {}
 
   /**
@@ -162,9 +161,12 @@ export class PayrollHistoryManager<
    * @returns Aggregated summary statistics
    */
   async payrollSummary(params: PayrollSummaryParams): Promise<PayrollSummaryResult> {
-    const { organizationId, month, year } = params;
+    const { organizationId: explicitOrgId, month, year } = params;
 
-    const query: Record<string, unknown> = { organizationId: toObjectId(organizationId) };
+    // Resolve organizationId (required in multi-tenant, auto-inject in single-tenant)
+    const orgId = this.resolveOrganizationIdFn(explicitOrgId);
+
+    const query: Record<string, unknown> = { organizationId: orgId };
     if (month) query['period.month'] = month;
     if (year) query['period.year'] = year;
 
@@ -195,55 +197,6 @@ export class PayrollHistoryManager<
     };
   }
 
-  /**
-   * Export payroll data for a date range
-   *
-   * Features:
-   * - Retrieves all payroll records in date range
-   * - Populates employee and transaction details
-   * - Marks records as exported with timestamp
-   * - Emits audit event for compliance
-   *
-   * IMPORTANT: Marks records as exported to prevent duplicate exports
-   *
-   * @param params - Export parameters (organization, date range)
-   * @returns Payroll records with full details
-   */
-  async exportPayroll(params: ExportPayrollParams): Promise<TPayrollRecord[]> {
-    const { organizationId, startDate, endDate } = params;
-
-    const query = {
-      organizationId: toObjectId(organizationId),
-      'period.payDate': { $gte: startDate, $lte: endDate },
-    };
-
-    const records = await this.models.PayrollRecordModel.find(query)
-      .populate('employeeId', 'employeeId position department')
-      .populate('userId', 'name email')
-      .populate('transactionId', 'amount method status date')
-      .sort({ 'period.year': -1, 'period.month': -1 });
-
-    // Mark as exported
-    await this.models.PayrollRecordModel.updateMany(query, {
-      exported: true,
-      exportedAt: new Date(),
-    });
-
-    // Emit event
-    this.events.emitSync('payroll:exported', {
-      organizationId: toObjectId(organizationId),
-      dateRange: { start: startDate, end: endDate },
-      recordCount: records.length,
-      format: 'json',
-    });
-
-    getLogger().info('Payroll data exported', {
-      organizationId: organizationId.toString(),
-      count: records.length,
-    });
-
-    return records as unknown as TPayrollRecord[];
-  }
 }
 
 /**
@@ -261,7 +214,7 @@ export function createPayrollHistoryManager<
   },
   events: EventBus,
   resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-  findEmployeeFn: (params: any) => Promise<TEmployee>
+  findEmployeeFn: import('./context.js').FindEmployeeFn<TEmployee>
 ): PayrollHistoryManager<TEmployee, TPayrollRecord, TTransaction> {
-  return new PayrollHistoryManager(models, events, resolveOrganizationIdFn, findEmployeeFn) as any;
+  return new PayrollHistoryManager<TEmployee, TPayrollRecord, TTransaction>(models, events, resolveOrganizationIdFn, findEmployeeFn);
 }

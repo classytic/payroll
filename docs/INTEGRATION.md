@@ -1,17 +1,19 @@
 # Attendance Integration
 
-Optional integration with attendance systems for payroll deductions.
+Optional integration with attendance systems for automatic payroll deductions.
 
-## Required Attendance Fields
+## Attendance Record Interface
+
+Your attendance model must include these fields:
 
 ```typescript
 interface AttendanceRecord {
-  organizationId: ObjectId;
-  targetModel: string; // Must include 'Employee'
-  targetId: ObjectId; // Employee._id
-  year: number;
-  month: number;
-  totalWorkDays: number; // fullDays + (halfDays × 0.5) + paidLeaveDays
+  organizationId: ObjectId,
+  targetModel: string,         // Must include 'Employee'
+  targetId: ObjectId,          // Employee._id
+  year: number,
+  month: number,
+  totalWorkDays: number,       // fullDays + (halfDays × 0.5) + paidLeaveDays
 }
 ```
 
@@ -25,7 +27,7 @@ const payroll = createPayrollInstance()
     EmployeeModel,
     PayrollRecordModel,
     TransactionModel,
-    AttendanceModel, // Enable attendance integration
+    AttendanceModel,         // Enable attendance integration
   })
   .withConfig({
     payroll: { attendanceIntegration: true },
@@ -33,9 +35,11 @@ const payroll = createPayrollInstance()
   .build();
 ```
 
-## Usage
+## Usage Options
 
-### Explicit Attendance (Recommended)
+### Option 1: Explicit Attendance (Recommended)
+
+Fetch attendance separately and pass it to salary processing:
 
 ```typescript
 import { getAttendance } from '@classytic/payroll';
@@ -51,45 +55,103 @@ await payroll.processSalary({
   organizationId,
   employeeId,
   period: { month: 1, year: 2024 },
-  attendance, // Explicit attendance
+  attendance,  // { expectedDays: 22, actualDays: 20 }
 });
 ```
 
-### Auto-Fetch (Fallback)
+### Option 2: Auto-Fetch (Fallback)
+
+If `AttendanceModel` is provided but no attendance data is passed, the system auto-fetches:
 
 ```typescript
-// If AttendanceModel is provided and no attendance is passed,
-// it will auto-fetch from the database
 await payroll.processSalary({
   organizationId,
   employeeId,
   period: { month: 1, year: 2024 },
-  // attendance auto-fetched
+  // attendance auto-fetched from AttendanceModel
 });
 ```
 
-## Calculation
+### Option 3: Skip Attendance
+
+```typescript
+await payroll.processSalary({
+  organizationId,
+  employeeId,
+  period: { month: 1, year: 2024 },
+  options: { skipAttendance: true },
+});
+```
+
+## Deduction Calculation
 
 ```
-Pro-rated salary = baseAmount × (actualWorkDays / expectedWorkDays)
+Deduction = (expectedDays - actualDays) × dailyRate
+dailyRate = baseSalary / expectedDays
 ```
 
-Example:
+**Example:**
 - Base salary: $5000/month
 - Expected work days: 22
 - Actual work days: 20
-- Pro-rated salary: $5000 × (20/22) = $4545.45
+- Daily rate: $5000 / 22 = $227.27
+- Deduction: 2 × $227.27 = $454.54
+- Pro-rated salary: $5000 - $454.54 = $4545.46
+
+## Batch Attendance Fetch
+
+For bulk payroll processing:
+
+```typescript
+import { batchGetAttendance } from '@classytic/payroll';
+
+const attendanceMap = await batchGetAttendance(AttendanceModel, {
+  employeeIds: [emp1Id, emp2Id, emp3Id],
+  organizationId,
+  year: 2024,
+  month: 1,
+});
+
+// Returns Map<string, { expectedDays, actualDays }>
+```
 
 ## Integration with @classytic/clockin
+
+If using the `@classytic/clockin` package:
 
 ```typescript
 import { createAttendanceSchema } from '@classytic/clockin/schemas';
 
-const Attendance = model('Attendance', createAttendanceSchema());
+const AttendanceModel = mongoose.model('Attendance', createAttendanceSchema());
 
-// Use with payroll
 const payroll = createPayrollInstance()
-  .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel, Attendance })
-  .withConfig({ payroll: { attendanceIntegration: true } })
+  .withModels({
+    EmployeeModel,
+    PayrollRecordModel,
+    TransactionModel,
+    AttendanceModel,
+  })
+  .withConfig({
+    payroll: { attendanceIntegration: true },
+  })
   .build();
+```
+
+## Custom Attendance Logic
+
+Use the pure calculator for custom implementations:
+
+```typescript
+import { calculateAttendanceDeduction, calculateDailyRate } from '@classytic/payroll/calculators';
+
+const dailyRate = calculateDailyRate(baseSalary, expectedDays);
+
+const result = calculateAttendanceDeduction({
+  expectedWorkingDays: 22,
+  actualWorkingDays: 20,
+  dailyRate,
+  maxDeductionPercent: 50,  // Cap at 50% of salary
+});
+
+// { hasDeduction: true, deductionAmount: 454.54, absentDays: 2 }
 ```

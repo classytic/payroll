@@ -112,13 +112,15 @@ export class DuplicatePayrollError extends PayrollError {
     employeeId: string,
     month: number,
     year: number,
+    payrollRunType?: string,
     context?: Record<string, unknown>
   ) {
+    const runTypeInfo = payrollRunType ? ` (${payrollRunType})` : '';
     super(
-      `Payroll already processed for employee ${employeeId} in ${month}/${year}`,
+      `Payroll already processed for employee ${employeeId} in ${month}/${year}${runTypeInfo}`,
       'DUPLICATE_PAYROLL',
       409,
-      { employeeId, month, year, ...context }
+      { employeeId, month, year, payrollRunType, ...context }
     );
   }
 }
@@ -197,11 +199,14 @@ export function createError(
     EMPLOYEE_NOT_FOUND: 404,
     INVALID_EMPLOYEE: 400,
     DUPLICATE_PAYROLL: 409,
+    VOIDED_PAYROLL_REPROCESS: 409,
     VALIDATION_ERROR: 400,
     EMPLOYEE_TERMINATED: 400,
     ALREADY_PROCESSED: 409,
     NOT_ELIGIBLE: 400,
     SECURITY_ERROR: 403,
+    EXPORT_NOT_FOUND: 404,
+    EXPORT_ORG_MISMATCH: 403,
   };
 
   return new PayrollError(message, code, statusMap[code] || 500, context ?? {});

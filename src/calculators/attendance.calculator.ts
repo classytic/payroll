@@ -4,8 +4,12 @@
  * Pure functions for calculating salary deductions based on attendance.
  * No database dependencies - can be used client-side!
  *
+ * All monetary calculations use banker's rounding for financial accuracy.
+ *
  * @packageDocumentation
  */
+
+import { roundMoney } from '../utils/money.js';
 
 // ============================================================================
 // Types
@@ -98,8 +102,8 @@ export function calculateAttendanceDeduction(input: AttendanceDeductionInput): A
   // Calculate absent days (cannot be negative)
   const absentDays = Math.max(0, expected - actual);
 
-  // Calculate deduction amount
-  const deductionAmount = Math.round(absentDays * rate);
+  // Calculate deduction amount (banker's rounding to cents)
+  const deductionAmount = roundMoney(absentDays * rate, 2);
 
   return {
     absentDays,
@@ -125,7 +129,7 @@ export function calculateAttendanceDeduction(input: AttendanceDeductionInput): A
  */
 export function calculateDailyRate(monthlySalary: number, workingDays: number): number {
   if (workingDays <= 0) return 0;
-  return Math.round(monthlySalary / workingDays);
+  return roundMoney(monthlySalary / workingDays, 2);
 }
 
 /**
@@ -150,7 +154,7 @@ export function calculateHourlyRate(
 ): number {
   const dailyRate = calculateDailyRate(monthlySalary, workingDays);
   if (hoursPerDay <= 0) return 0;
-  return Math.round(dailyRate / hoursPerDay);
+  return roundMoney(dailyRate / hoursPerDay, 2);
 }
 
 /**
@@ -170,7 +174,7 @@ export function calculateHourlyRate(
  */
 export function calculatePartialDayDeduction(dailyRate: number, fractionAbsent: number): number {
   const fraction = Math.min(1, Math.max(0, fractionAbsent));
-  return Math.round(dailyRate * fraction);
+  return roundMoney(dailyRate * fraction, 2);
 }
 
 /**
@@ -208,8 +212,8 @@ export function calculateTotalAttendanceDeduction(input: {
 } {
   const { dailyRate, fullDayAbsences = 0, partialDayAbsences = [] } = input;
 
-  // Full day deductions
-  const fullDayDeduction = Math.round(dailyRate * Math.max(0, fullDayAbsences));
+  // Full day deductions (banker's rounding to whole units)
+  const fullDayDeduction = roundMoney(dailyRate * Math.max(0, fullDayAbsences), 2);
 
   // Partial day deductions
   const partialDayDeduction = partialDayAbsences.reduce(

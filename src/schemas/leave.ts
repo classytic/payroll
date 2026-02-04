@@ -7,7 +7,7 @@
  * Single source of truth for LeaveRequest: models/leave-request.model.ts
  */
 
-import { Schema, type SchemaDefinition } from 'mongoose';
+import { Schema, type SchemaDefinition, type IndexDefinition } from 'mongoose';
 import { LEAVE_TYPE_VALUES, LEAVE_REQUEST_STATUS_VALUES } from '../enums.js';
 import {
   leaveRequestSchema,
@@ -93,7 +93,7 @@ export function applyLeaveRequestIndexes(
   if (!options.createIndexes) return;
 
   for (const { fields } of leaveRequestIndexes) {
-    schema.index(fields as any);
+    schema.index(fields as unknown as IndexDefinition);
   }
 
   if (options.enableTTL) {

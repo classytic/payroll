@@ -14,6 +14,7 @@
  */
 
 import { countWorkingDays } from '../core/config.js';
+import { roundMoney } from '../utils/money.js';
 
 // ============================================================================
 // Types
@@ -44,7 +45,7 @@ export interface ProRatingInput {
   periodEnd: Date;
 
   /**
-   * Working days of the week (1=Monday, 7=Sunday)
+   * Working days of the week using Date.getDay() convention (0=Sunday, 1=Monday, ..., 6=Saturday)
    * @default [1, 2, 3, 4, 5] (Monday-Friday)
    */
   workingDays: number[];
@@ -188,7 +189,7 @@ export function calculateProRating(input: ProRatingInput): ProRatingResult {
  * @pure No side effects
  */
 export function applyProRating(baseAmount: number, ratio: number): number {
-  return Math.round(baseAmount * ratio);
+  return roundMoney(baseAmount * ratio, 2);
 }
 
 /**

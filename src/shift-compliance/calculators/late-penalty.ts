@@ -11,6 +11,7 @@ import type {
   LateOccurrence,
   PenaltyTier,
 } from '../types.js';
+import { roundMoney } from '../../utils/money.js';
 
 // ============================================================================
 // Flat Penalty Mode
@@ -55,7 +56,7 @@ export function calculatePerMinutePenalty(
   perMinuteRate: number
 ): { amount: number; minutes: number } {
   return {
-    amount: Math.round(totalMinutesLate * perMinuteRate),
+    amount: roundMoney(totalMinutesLate * perMinuteRate, 2),
     minutes: totalMinutesLate,
   };
 }
@@ -79,7 +80,7 @@ export function calculatePercentagePenalty(
   percentageRate: number,
   dailyWage: number
 ): { amount: number; percentage: number } {
-  const penaltyPerOccurrence = Math.round((dailyWage * percentageRate) / 100);
+  const penaltyPerOccurrence = roundMoney((dailyWage * percentageRate) / 100, 2);
   return {
     amount: occurrenceCount * penaltyPerOccurrence,
     percentage: percentageRate,
@@ -327,14 +328,14 @@ export function calculateLatePenalty(input: {
     return {
       date: occ.date,
       minutesLate: occ.minutesLate,
-      penaltyAmount: Math.round(penaltyPerOccurrence),
+      penaltyAmount: roundMoney(penaltyPerOccurrence, 2),
       tier: tierInfo?.tier,
       waived: false,
     };
   });
 
   return {
-    amount: Math.round(totalPenalty),
+    amount: roundMoney(totalPenalty, 2),
     occurrences: penalizableCount,
     breakdown,
   };

@@ -12,7 +12,7 @@ import {
   getTaxWithholdingModel,
   type TaxWithholdingModel,
 } from '../models/tax-withholding.model.js';
-import type { Schema, SchemaDefinition } from 'mongoose';
+import type { Schema, SchemaDefinition, IndexDefinition } from 'mongoose';
 
 // Re-export the authoritative schema
 export { taxWithholdingSchema, getTaxWithholdingModel, type TaxWithholdingModel };
@@ -38,7 +38,7 @@ export const taxWithholdingIndexes = [
  */
 export function applyTaxWithholdingIndexes(schema: Schema): void {
   for (const { fields, options } of taxWithholdingIndexes) {
-    schema.index(fields as any, options);
+    schema.index(fields as unknown as IndexDefinition, options);
   }
 }
 

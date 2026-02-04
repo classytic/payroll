@@ -73,7 +73,7 @@ export interface CreateTaxPaymentTransactionInput {
  * @pure This function has no side effects
  */
 export function createPayrollTransaction(input: CreatePayrollTransactionInput): ITransactionCreateInput {
-  const { organizationId, employee, payrollRecord, breakdown, period, paymentDate, paymentMethod = 'bank_transfer', processedBy, idempotencyKey, jurisdiction, defaultCurrency } = input;
+  const { organizationId, employee, payrollRecord, breakdown, period, paymentDate, paymentMethod = 'bank', processedBy, idempotencyKey, jurisdiction, defaultCurrency } = input;
 
   // Extract userId if present (optional for guest employees)
   const userIdValue = employee.userId
@@ -203,7 +203,7 @@ export function createTaxPaymentTransaction(input: CreateTaxPaymentTransactionIn
     fee: 0,
 
     // Payment
-    method: 'bank_transfer',
+    method: 'bank',
     date: new Date(),
 
     // References

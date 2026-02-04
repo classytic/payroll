@@ -5,7 +5,7 @@
  * Enforces organizationId isolation on all queries
  */
 
-import type { Model } from 'mongoose';
+import type { Model, ClientSession } from 'mongoose';
 import type { EmployeeDocument, ObjectIdLike } from '../types.js';
 import { toObjectId, isValidObjectId } from './query-builders.js';
 import { EmployeeNotFoundError } from '../errors/index.js';
@@ -98,7 +98,7 @@ export interface SecureEmployeeLookupOptions {
   /**
    * Mongoose session for transactions
    */
-  session?: any;
+  session?: ClientSession;
 
   /**
    * Fields to populate
@@ -163,7 +163,7 @@ export async function findEmployeeSecure<T extends EmployeeDocument>(
   } = options;
 
   // Build query with organizationId isolation
-  const query: Record<string, any> = {};
+  const query: Record<string, unknown> = {};
 
   // STRICT MODE: Enforce organizationId in multi-tenant apps
   if (strictMultiTenant && !organizationId) {
@@ -276,8 +276,8 @@ export async function findEmployeesSecure<T extends EmployeeDocument>(
   model: Model<T>,
   options: {
     organizationId: ObjectIdLike;
-    filter?: Record<string, any>;
-    session?: any;
+    filter?: Record<string, unknown>;
+    session?: ClientSession;
     limit?: number;
     skip?: number;
     sort?: Record<string, 1 | -1>;

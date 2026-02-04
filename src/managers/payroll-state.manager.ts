@@ -11,6 +11,7 @@ import { Model } from 'mongoose';
 import type {
   PayrollRecordDocument,
   AnyDocument,
+  AnyModel,
   ObjectIdLike,
   VoidPayrollParams,
   VoidPayrollResult,
@@ -19,6 +20,7 @@ import type {
   RestorePayrollParams,
   RestorePayrollResult,
   TaxWithholdingDocument,
+  TaxWithholdingModel,
 } from '../types.js';
 import { getLogger } from '../utils/logger.js';
 import { toObjectId } from '../utils/query-builders.js';
@@ -168,8 +170,8 @@ export class PayrollStateManager<
     if (this.models.TaxWithholdingModel) {
       const { TaxWithholdingService } = await import('../services/tax-withholding.service.js');
       const taxService = new TaxWithholdingService(
-        this.models.TaxWithholdingModel as any,
-        this.models.TransactionModel! as any,
+        this.models.TaxWithholdingModel as unknown as TaxWithholdingModel,
+        this.models.TransactionModel as AnyModel | undefined,
         this.events
       );
 
@@ -216,7 +218,7 @@ export class PayrollStateManager<
    * @throws ValidationError if payroll is not paid (use voidPayroll instead)
    */
   async reversePayroll(params: ReversePayrollParams): Promise<ReversePayrollResult> {
-    const { organizationId, payrollRecordId, reason, createReversalTransaction = true, context } = params;
+    const { organizationId, payrollRecordId, reason, createReversalTransaction = true, paymentMethod = 'manual', context } = params;
     const session = context?.session;
 
     if (!reason || reason.trim().length < 5) {
@@ -247,22 +249,82 @@ export class PayrollStateManager<
       throw new ValidationError(transition.error);
     }
 
-    // Create reversal transaction (negative amount)
+    // Validate breakdown exists before reversal (HRM compliance: must know exact amounts)
+    if (!payrollRecord.breakdown) {
+      throw new ValidationError(
+        'Cannot reverse payroll without breakdown data. Breakdown is required for audit trail.'
+      );
+    }
+
+    const originalAmount = payrollRecord.breakdown.netSalary;
+    const grossAmount = payrollRecord.breakdown.grossSalary;
+    const taxAmount = payrollRecord.breakdown.taxAmount || 0;
+
+    // Validate amounts are valid (prevent reversing $0 or negative amounts)
+    if (grossAmount <= 0 || originalAmount <= 0) {
+      throw new ValidationError(
+        `Cannot reverse payroll with invalid amounts. Gross: ${grossAmount}, Net: ${originalAmount}`
+      );
+    }
+
+    // Create reversal transaction (positive amount with inflow)
     let reversalTransaction: AnyDocument | undefined;
+    let originalTx: AnyDocument | null = null;
+
     if (createReversalTransaction && this.models.TransactionModel) {
-      const originalAmount = payrollRecord.breakdown?.netSalary || 0;
+      // Get original transaction for reconciliation
+      let currency = 'USD'; // Default fallback
+      if (payrollRecord.transactionId) {
+        originalTx = await this.models.TransactionModel.findById(payrollRecord.transactionId).session(session || null);
+        if (originalTx) {
+          if (originalTx.currency) {
+            currency = originalTx.currency as string;
+          }
+
+          // Reconciliation check: warn if amounts don't match (allows 1 cent rounding difference)
+          const amountDiff = Math.abs((originalTx.amount as number) - grossAmount);
+          if (amountDiff > 0.01) {
+            getLogger().warn('Reversal amount mismatch with original transaction', {
+              payrollRecordId: payrollRecordId.toString(),
+              originalTransactionAmount: originalTx.amount,
+              breakdownGrossAmount: grossAmount,
+              difference: amountDiff,
+            });
+          }
+        }
+      }
 
       const [created] = await (this.models.TransactionModel as Model<AnyDocument>).create([{
         organizationId: toObjectId(organizationId),
-        amount: -originalAmount, // Negative amount for reversal
-        type: 'payroll_reversal',
+
+        // Classification (aligned with @classytic/shared-types)
+        type: 'salary_reversal',
         flow: 'inflow', // Reversal is an inflow (money back)
-        status: 'completed',
-        description: `Payroll Reversal: ${reason}`,
-        date: new Date(),
         tags: ['reversal', 'payroll', 'correction'],
-        referenceId: payrollRecord._id,
-        referenceModel: 'PayrollRecord',
+        status: 'completed',
+
+        // Amounts (positive values - ITransaction requires amount >= 0)
+        amount: Math.abs(grossAmount), // ✅ Ensure positive
+        net: Math.abs(originalAmount), // ✅ Ensure positive
+        currency,
+        fee: 0,
+        tax: Math.abs(payrollRecord.breakdown?.taxAmount || 0),
+
+        // Payment (default: manual for reversals, configurable for different scenarios)
+        method: paymentMethod,
+        date: new Date(),
+
+        // Parties
+        employeeId: payrollRecord.employeeId,
+        customerId: payrollRecord.userId,
+
+        // References (correct field names per ITransaction)
+        sourceId: payrollRecord._id,
+        sourceModel: 'PayrollRecord',
+        relatedTransactionId: payrollRecord.transactionId,
+
+        // Metadata
+        description: `Payroll Reversal: ${reason}`,
         metadata: {
           originalPayrollId: payrollRecord._id,
           originalTransactionId: payrollRecord.transactionId,
@@ -315,8 +377,8 @@ export class PayrollStateManager<
     if (this.models.TaxWithholdingModel) {
       const { TaxWithholdingService } = await import('../services/tax-withholding.service.js');
       const taxService = new TaxWithholdingService(
-        this.models.TaxWithholdingModel as any,
-        this.models.TransactionModel! as any,
+        this.models.TaxWithholdingModel as unknown as TaxWithholdingModel,
+        this.models.TransactionModel as AnyModel | undefined,
         this.events
       );
 
@@ -396,6 +458,26 @@ export class PayrollStateManager<
     if (payrollRecord.reversalTransactionId) {
       throw new ValidationError(
         'Cannot restore a payroll with reversal transaction. The transaction would become orphaned.'
+      );
+    }
+
+    // Check if an active (non-voided) record already exists for this period
+    // This can happen if a replacement payroll was created after voiding the original
+    const existingActive = await this.models.PayrollRecordModel.findOne({
+      organizationId: toObjectId(organizationId),
+      employeeId: payrollRecord.employeeId,
+      'period.month': payrollRecord.period.month,
+      'period.year': payrollRecord.period.year,
+      payrollRunType: payrollRecord.payrollRunType,
+      isVoided: { $ne: true },
+      _id: { $ne: payrollRecord._id },
+    }).session(session || null);
+
+    if (existingActive) {
+      throw new ValidationError(
+        `Cannot restore: An active payroll record already exists for employee ${payrollRecord.employeeId} ` +
+        `in ${payrollRecord.period.month}/${payrollRecord.period.year} with run type '${payrollRecord.payrollRunType}'. ` +
+        `Void or reverse the existing record first.`
       );
     }
 

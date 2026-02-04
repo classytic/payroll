@@ -277,9 +277,9 @@ export class TieredPenaltyBuilder<TParent> {
       this.saveTier();
     }
 
-    // Update parent's tiers
+    // Update parent's tiers via internal accessor
     if (this.parent instanceof LatePolicyBuilder) {
-      (this.parent as any).policy.tiers = this.tiers;
+      this.parent._getPolicy().tiers = this.tiers;
     }
 
     return this.parent;

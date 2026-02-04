@@ -115,16 +115,38 @@ export function endOfDay(date: Date): Date {
 }
 
 // ============================================================================
+// Date Normalization
+// ============================================================================
+
+/**
+ * Convert a date to a UTC-based date string for consistent comparison.
+ *
+ * Unlike `Date.toDateString()` which uses the local timezone, this produces
+ * a locale-independent string based on the date's year/month/day components.
+ * Use this for holiday set lookups to avoid timezone-dependent mismatches.
+ */
+export function toUTCDateString(date: Date): string {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ============================================================================
 // Date Differences
 // ============================================================================
 
 /**
- * Calculate difference in days between two dates
+ * Calculate difference in days between two dates.
+ *
+ * Normalizes both dates to midnight before computing to avoid
+ * inconsistencies from time-of-day differences or DST transitions.
  */
 export function diffInDays(start: Date, end: Date): number {
-  return Math.ceil(
-    (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const s = new Date(start);
+  const e = new Date(end);
+  s.setHours(0, 0, 0, 0);
+  e.setHours(0, 0, 0, 0);
+  return Math.ceil((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 /**
@@ -198,7 +220,7 @@ export function getDayName(date: Date): string {
 // ============================================================================
 
 /**
- * Get pay period for a given month and year
+ * Get pay period for a given month and year (monthly periods)
  */
 export function getPayPeriod(month: number, year: number): PayPeriodInfo {
   const startDate = new Date(year, month - 1, 1);
@@ -208,6 +230,79 @@ export function getPayPeriod(month: number, year: number): PayPeriodInfo {
     startDate: startOfMonth(startDate),
     endDate: endOfMonth(startDate),
   };
+}
+
+/**
+ * Get pay period based on payment frequency
+ *
+ * Creates the correct period boundaries based on the employee's payment frequency:
+ * - monthly: full calendar month
+ * - bi_weekly: 14 days ending on paymentDate
+ * - weekly: 7 days ending on paymentDate
+ * - daily/hourly: single day (paymentDate)
+ *
+ * @param frequency - Payment frequency
+ * @param paymentDate - Date of payment (used as end of period for non-monthly)
+ * @param month - Month (1-12) for accounting purposes
+ * @param year - Year for accounting purposes
+ * @returns Pay period with appropriate boundaries
+ */
+export function getPayPeriodForFrequency(
+  frequency: PaymentFrequency,
+  paymentDate: Date,
+  month: number,
+  year: number
+): PayPeriodInfo & { workingDays: number } {
+  switch (frequency) {
+    case 'monthly': {
+      const period = getPayPeriod(month, year);
+      const workingDays = getWorkingDaysInMonth(year, month);
+      return { ...period, workingDays };
+    }
+
+    case 'bi_weekly': {
+      // 14-day period ending on paymentDate
+      const endDate = startOfDay(paymentDate);
+      const startDate = addDays(endDate, -13); // 14 days total (0-13)
+      const workingDays = countWeekdaysInRange(startDate, endDate);
+      return { month, year, startDate, endDate, workingDays };
+    }
+
+    case 'weekly': {
+      // 7-day period ending on paymentDate
+      const endDate = startOfDay(paymentDate);
+      const startDate = addDays(endDate, -6); // 7 days total (0-6)
+      const workingDays = countWeekdaysInRange(startDate, endDate);
+      return { month, year, startDate, endDate, workingDays };
+    }
+
+    case 'daily':
+    case 'hourly': {
+      // Single day period
+      const date = startOfDay(paymentDate);
+      const workingDays = isWeekday(date) ? 1 : 0;
+      return { month, year, startDate: date, endDate: date, workingDays };
+    }
+
+    default:
+      // Fallback to monthly
+      return getPayPeriodForFrequency('monthly', paymentDate, month, year);
+  }
+}
+
+/**
+ * Count weekdays (Mon-Fri) in a date range (inclusive)
+ */
+function countWeekdaysInRange(start: Date, end: Date): number {
+  let count = 0;
+  const current = new Date(start);
+  while (current <= end) {
+    if (isWeekday(current)) {
+      count++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  return count;
 }
 
 /**
@@ -402,6 +497,7 @@ export function getShortMonthName(month: number): string {
 // ============================================================================
 
 export default {
+  toUTCDateString,
   addDays,
   addMonths,
   addYears,

@@ -12,6 +12,9 @@
 import type { ClientSession } from 'mongoose';
 import type {
   EmployeeDocument,
+  PayrollRecordDocument,
+  AnyDocument,
+  LeaveRequestDocument,
   ObjectId,
   ObjectIdLike,
   HireEmployeeParams,
@@ -25,6 +28,8 @@ import { ValidationError, EmployeeTerminatedError } from '../errors/index.js';
 import type { EventBus } from '../core/events.js';
 import type { HRMConfig } from '../types.js';
 import type { PayrollRepositories } from '../types.js';
+import type { FindEmployeeFn } from './context.js';
+import type { RequestScopedServices } from './repository.manager.js';
 
 /**
  * EmployeeOperationsManager
@@ -71,15 +76,17 @@ import type { PayrollRepositories } from '../types.js';
  * ```
  */
 export class EmployeeOperationsManager<
-  TEmployee extends EmployeeDocument = EmployeeDocument
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument
 > {
   constructor(
     private readonly events: EventBus,
     private readonly config: HRMConfig,
     private readonly resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-    private readonly findEmployeeFn: (params: any) => Promise<TEmployee>,
-    private readonly getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, any, any, any>,
-    private readonly getServicesForRequestFn: (repos: any) => any
+    private readonly findEmployeeFn: FindEmployeeFn<TEmployee>,
+    private readonly getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+    private readonly getServicesForRequestFn: (repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>) => RequestScopedServices<TEmployee, TPayrollRecord>
   ) {}
 
   /**
@@ -290,7 +297,7 @@ export class EmployeeOperationsManager<
     );
 
     // Update position, department, and compensation if provided
-    const updates: any = {};
+    const updates: Record<string, unknown> = {};
     if (position) updates.position = position;
     if (department) updates.department = department;
     if (compensation) {
@@ -358,15 +365,17 @@ export class EmployeeOperationsManager<
  * Factory function for creating EmployeeOperationsManager
  */
 export function createEmployeeOperationsManager<
-  TEmployee extends EmployeeDocument = EmployeeDocument
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument
 >(
   events: EventBus,
   config: HRMConfig,
   resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-  findEmployeeFn: (params: any) => Promise<TEmployee>,
-  getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, any, any, any>,
-  getServicesForRequestFn: (repos: any) => any
-): EmployeeOperationsManager<TEmployee> {
+  findEmployeeFn: FindEmployeeFn<TEmployee>,
+  getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+  getServicesForRequestFn: (repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>) => RequestScopedServices<TEmployee, TPayrollRecord>
+): EmployeeOperationsManager<TEmployee, TPayrollRecord, TTransaction> {
   return new EmployeeOperationsManager(
     events,
     config,

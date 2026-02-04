@@ -13,6 +13,7 @@ import type {
   ObjectIdLike,
   OperationContext,
 } from '../types.js';
+import { getLogger } from '../utils/logger.js';
 
 // ============================================================================
 // Event Payload Types
@@ -106,7 +107,8 @@ export interface PayrollCompletedEventPayload {
 
 export interface PayrollExportedEventPayload {
   organizationId: ObjectId;
-  dateRange: { start: Date; end: Date };
+  exportId?: string;
+  dateRange?: { start: Date; end: Date };
   recordCount: number;
   format: string;
   context?: OperationContext;
@@ -294,7 +296,9 @@ export class EventBus {
         try {
           await handler(payload);
         } catch (error) {
-          console.error(`Event handler error for ${event}:`, error);
+          getLogger().error(`Event handler error for ${event}`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       })
     );

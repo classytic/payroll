@@ -9,7 +9,7 @@
  * - Streaming for large datasets (10k+ employees)
  */
 
-import mongoose, { Model } from 'mongoose';
+import { Model } from 'mongoose';
 import pLimit from 'p-limit';
 import type {
   EmployeeDocument,
@@ -18,11 +18,15 @@ import type {
   ObjectId,
   ObjectIdLike,
   ProcessBulkPayrollParams,
+  ProcessSalaryParams,
+  ProcessSalaryResult,
   BulkPayrollResult,
   BulkPayrollProgress,
   PaymentMethod,
   OperationContext,
 } from '../types.js';
+import type { ResolveOrganizationIdFn } from './context.js';
+import type { PayrollProcessingOptions } from '../core/config.js';
 import { getLogger } from '../utils/logger.js';
 import { toObjectId } from '../utils/query-builders.js';
 import type { EventBus } from '../core/events.js';
@@ -85,7 +89,8 @@ export class BulkOperationsManager<
       AttendanceModel?: Model<TAttendance> | null;
     },
     private readonly events: EventBus,
-    private readonly processSalaryFn: (params: any) => Promise<any>
+    private readonly processSalaryFn: (params: ProcessSalaryParams) => Promise<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>>,
+    private readonly resolveOrganizationIdFn: ResolveOrganizationIdFn
   ) {}
 
   /**
@@ -100,7 +105,7 @@ export class BulkOperationsManager<
    */
   async processBulkPayroll(params: ProcessBulkPayrollParams): Promise<BulkPayrollResult> {
     const {
-      organizationId,
+      organizationId: explicitOrgId,
       month,
       year,
       employeeIds = [],
@@ -115,9 +120,15 @@ export class BulkOperationsManager<
       batchDelay = 0,
       concurrency = 1,
       useStreaming,
+      maxResultDetails = Infinity,
     } = params;
 
-    const query: Record<string, unknown> = { organizationId: toObjectId(organizationId), status: 'active' };
+    // Resolve organizationId (required in multi-tenant, auto-inject in single-tenant)
+    // Also check context.organizationId for parity with processSalary
+    const organizationId = this.resolveOrganizationIdFn(explicitOrgId || context?.organizationId);
+
+    // Include both active and on_leave employees (matching single-employee eligibility)
+    const query: Record<string, unknown> = { organizationId, status: { $in: ['active', 'on_leave'] } };
     if (employeeIds.length > 0) {
       query._id = { $in: employeeIds.map(toObjectId) };
     }
@@ -143,6 +154,7 @@ export class BulkOperationsManager<
         concurrency,
         onProgress,
         total: employeeCount,
+        maxResultDetails,
       });
     }
 
@@ -154,17 +166,20 @@ export class BulkOperationsManager<
       successful: [],
       failed: [],
       total,
+      successCount: 0,
+      failCount: 0,
+      totalAmount: 0,
     };
 
     // Helper to report progress
     const reportProgress = async (currentEmployee?: string) => {
       if (onProgress) {
-        const processed = results.successful.length + results.failed.length;
+        const processed = results.successCount + results.failCount;
         await onProgress({
           processed,
           total,
-          successful: results.successful.length,
-          failed: results.failed.length,
+          successful: results.successCount,
+          failed: results.failCount,
           currentEmployee,
           percentage: total > 0 ? Math.round((processed / total) * 100) : 0,
         });
@@ -177,7 +192,7 @@ export class BulkOperationsManager<
       if (signal?.aborted) {
         getLogger().warn('Bulk payroll cancelled', {
           organizationId: organizationId.toString(),
-          processed: results.successful.length + results.failed.length,
+          processed: results.successCount + results.failCount,
           total,
         });
         throw new Error('Payroll processing cancelled by user');
@@ -202,16 +217,24 @@ export class BulkOperationsManager<
               context: { ...context, session: undefined },
             });
 
-            results.successful.push({
-              employeeId: employee.employeeId,
-              amount: result.payrollRecord.breakdown.netSalary,
-              transactionId: result.transaction._id,
-            });
+            const amount = result.payrollRecord.breakdown.netSalary;
+            results.successCount++;
+            results.totalAmount += amount;
+            if (results.successful.length < maxResultDetails) {
+              results.successful.push({
+                employeeId: employee.employeeId,
+                amount,
+                transactionId: result.transaction._id,
+              });
+            }
           } catch (error) {
-            results.failed.push({
-              employeeId: employee.employeeId,
-              error: (error as Error).message,
-            });
+            results.failCount++;
+            if (results.failed.length < maxResultDetails) {
+              results.failed.push({
+                employeeId: employee.employeeId,
+                error: (error as Error).message,
+              });
+            }
 
             getLogger().error('Failed to process salary', {
               employeeId: employee.employeeId,
@@ -247,16 +270,24 @@ export class BulkOperationsManager<
           const employee = batch[j];
 
           if (batchResult.status === 'fulfilled') {
-            results.successful.push({
-              employeeId: batchResult.value.employee.employeeId,
-              amount: batchResult.value.result.payrollRecord.breakdown.netSalary,
-              transactionId: batchResult.value.result.transaction._id,
-            });
+            const amount = batchResult.value.result.payrollRecord.breakdown.netSalary;
+            results.successCount++;
+            results.totalAmount += amount;
+            if (results.successful.length < maxResultDetails) {
+              results.successful.push({
+                employeeId: batchResult.value.employee.employeeId,
+                amount,
+                transactionId: batchResult.value.result.transaction._id,
+              });
+            }
           } else {
-            results.failed.push({
-              employeeId: employee.employeeId,
-              error: (batchResult.reason as Error).message || 'Unknown error',
-            });
+            results.failCount++;
+            if (results.failed.length < maxResultDetails) {
+              results.failed.push({
+                employeeId: employee.employeeId,
+                error: (batchResult.reason as Error).message || 'Unknown error',
+              });
+            }
 
             getLogger().error('Failed to process salary (concurrent)', {
               employeeId: employee.employeeId,
@@ -280,9 +311,9 @@ export class BulkOperationsManager<
       period: { month, year },
       summary: {
         total: results.total,
-        successful: results.successful.length,
-        failed: results.failed.length,
-        totalAmount: results.successful.reduce((sum, r) => sum + r.amount, 0),
+        successful: results.successCount,
+        failed: results.failCount,
+        totalAmount: results.totalAmount,
       },
       context,
     });
@@ -292,8 +323,8 @@ export class BulkOperationsManager<
       month,
       year,
       total: results.total,
-      successful: results.successful.length,
-      failed: results.failed.length,
+      successful: results.successCount,
+      failed: results.failCount,
       concurrency,
       batchSize,
     });
@@ -317,14 +348,15 @@ export class BulkOperationsManager<
     year: number;
     paymentDate: Date;
     paymentMethod?: string;
-    options?: any;
-    context?: any;
+    options?: PayrollProcessingOptions;
+    context?: OperationContext;
     signal?: AbortSignal;
     batchSize: number;
     batchDelay: number;
     concurrency: number;
     onProgress?: (progress: BulkPayrollProgress) => void | Promise<void>;
     total: number;
+    maxResultDetails: number;
   }): Promise<BulkPayrollResult> {
     const {
       query,
@@ -341,6 +373,7 @@ export class BulkOperationsManager<
       concurrency,
       onProgress,
       total,
+      maxResultDetails,
     } = params;
 
     const startTime = Date.now();
@@ -348,6 +381,9 @@ export class BulkOperationsManager<
       successful: [],
       failed: [],
       total,
+      successCount: 0,
+      failCount: 0,
+      totalAmount: 0,
     };
 
     // Create cursor (streams employees one at a time)
@@ -366,8 +402,8 @@ export class BulkOperationsManager<
         await onProgress({
           processed,
           total,
-          successful: results.successful.length,
-          failed: results.failed.length,
+          successful: results.successCount,
+          failed: results.failCount,
           currentEmployee,
           percentage: total > 0 ? Math.round((processed / total) * 100) : 0,
         });
@@ -400,16 +436,24 @@ export class BulkOperationsManager<
             context: { ...context, session: undefined },
           });
 
-          results.successful.push({
-            employeeId: employee.employeeId,
-            amount: result.payrollRecord.breakdown.netSalary,
-            transactionId: result.transaction._id,
-          });
+          const amount = result.payrollRecord.breakdown.netSalary;
+          results.successCount++;
+          results.totalAmount += amount;
+          if (results.successful.length < maxResultDetails) {
+            results.successful.push({
+              employeeId: employee.employeeId,
+              amount,
+              transactionId: result.transaction._id,
+            });
+          }
         } catch (error) {
-          results.failed.push({
-            employeeId: employee.employeeId,
-            error: (error as Error).message,
-          });
+          results.failCount++;
+          if (results.failed.length < maxResultDetails) {
+            results.failed.push({
+              employeeId: employee.employeeId,
+              error: (error as Error).message,
+            });
+          }
 
           getLogger().error('Failed to process salary (streaming)', {
             employeeId: employee.employeeId,
@@ -448,9 +492,9 @@ export class BulkOperationsManager<
       period: { month, year },
       summary: {
         total: results.total,
-        successful: results.successful.length,
-        failed: results.failed.length,
-        totalAmount: results.successful.reduce((sum, r) => sum + r.amount, 0),
+        successful: results.successCount,
+        failed: results.failCount,
+        totalAmount: results.totalAmount,
       },
       context,
     });
@@ -459,8 +503,8 @@ export class BulkOperationsManager<
 
     getLogger().info('Streaming bulk payroll completed', {
       total: results.total,
-      successful: results.successful.length,
-      failed: results.failed.length,
+      successful: results.successCount,
+      failed: results.failCount,
       duration,
       concurrency,
       batchSize,
@@ -486,7 +530,8 @@ export function createBulkOperationsManager<
     AttendanceModel?: Model<TAttendance> | null;
   },
   events: EventBus,
-  processSalaryFn: (params: any) => Promise<any>
+  processSalaryFn: (params: ProcessSalaryParams) => Promise<ProcessSalaryResult<TEmployee, TPayrollRecord, TTransaction>>,
+  resolveOrganizationIdFn: ResolveOrganizationIdFn
 ): BulkOperationsManager<TEmployee, TPayrollRecord, TTransaction, TAttendance> {
-  return new BulkOperationsManager(models, events, processSalaryFn) as any;
+  return new BulkOperationsManager<TEmployee, TPayrollRecord, TTransaction, TAttendance>(models, events, processSalaryFn, resolveOrganizationIdFn);
 }

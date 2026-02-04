@@ -15,6 +15,20 @@ export interface WebhookConfig {
   timeout?: number;
 }
 
+export interface WebhookManagerOptions {
+  /**
+   * Maximum number of delivery log entries to retain (default: 1000).
+   * Oldest entries are pruned when the limit is exceeded.
+   */
+  maxLogSize?: number;
+  /**
+   * Whether to store full payloads in the delivery log (default: false).
+   * When false, only metadata (event, url, status, error, sentAt) is stored,
+   * preventing PII from accumulating in memory.
+   */
+  storePayloads?: boolean;
+}
+
 export interface WebhookDelivery {
   id: string;
   event: PayrollEventType;
@@ -33,6 +47,13 @@ export interface WebhookDelivery {
 export class WebhookManager {
   private webhooks: WebhookConfig[] = [];
   private deliveryLog: WebhookDelivery[] = [];
+  private readonly maxLogSize: number;
+  private readonly storePayloads: boolean;
+
+  constructor(options?: WebhookManagerOptions) {
+    this.maxLogSize = options?.maxLogSize ?? 1000;
+    this.storePayloads = options?.storePayloads ?? false;
+  }
 
   /**
    * Register a webhook
@@ -82,12 +103,13 @@ export class WebhookManager {
       id: deliveryId,
       event,
       url: webhook.url,
-      payload,
+      payload: this.storePayloads ? payload : undefined,
       attempt: 0,
       status: 'pending',
     };
 
     this.deliveryLog.push(delivery);
+    this.pruneLog();
 
     const maxRetries = webhook.retries || 3;
 
@@ -227,6 +249,16 @@ export class WebhookManager {
 
     // Stripe-style format: t=timestamp,v1=signature
     return `t=${timestamp},v1=${signature}`;
+  }
+
+  /**
+   * Prune delivery log to stay within maxLogSize.
+   * Removes oldest entries first.
+   */
+  private pruneLog(): void {
+    if (this.deliveryLog.length > this.maxLogSize) {
+      this.deliveryLog = this.deliveryLog.slice(-this.maxLogSize);
+    }
   }
 
   /**

@@ -51,7 +51,7 @@ beforeAll(async () => {
   disableLogging();
 
   // MongoMemoryServer doesn't support transactions
-  mongoose.startSession = (async () => null) as any;
+  const mockSession = { startTransaction: () => { throw new Error("Transaction numbers are only allowed on a replica set member"); }, commitTransaction: async () => {}, abortTransaction: async () => {}, endSession: () => {}, inTransaction: () => false }; mongoose.startSession = (async () => mockSession) as any;
 
   // 2. Define schemas
   const userSchema = new Schema({

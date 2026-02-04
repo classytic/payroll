@@ -131,19 +131,21 @@ export {
   type PayrollProcessingOptions,
   type WorkingDaysResult,
   type ProrationResult,
-  type TaxResult,
   type AttendanceInput,
-  type SalaryCalculationResult,
   // Constants
   DEFAULT_WORK_SCHEDULE,
-  DEFAULT_TAX_BRACKETS,
   // Pure Calculation Functions
   countWorkingDays,
   calculateProration,
-  calculateAttendanceDeduction,
-  calculateSalaryBreakdown,
   getPayPeriod,
 } from './config.js';
+
+// Re-export calculateAttendanceDeduction from calculators for backward compatibility
+// The canonical version uses banker's rounding and returns detailed result
+export { calculateAttendanceDeduction } from '../calculators/attendance.calculator.js';
+
+// Canonical salary breakdown calculator (single source of truth)
+export { calculateSalaryBreakdown } from '../calculators/salary.calculator.js';
 
 // ============================================================================
 // State Machines

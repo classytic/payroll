@@ -18,6 +18,7 @@ import type {
 } from '../types.js';
 import { toObjectId } from '../utils/query-builders.js';
 import { calculateLeaveDays, hasLeaveBalance, getAvailableDays } from '../utils/leave.js';
+import { roundMoney } from '../utils/money.js';
 import { logger } from '../utils/logger.js';
 import { ValidationError, PayrollError } from '../errors/index.js';
 import type { LeaveRequestModel } from '../models/leave-request.model.js';
@@ -778,8 +779,8 @@ export class LeaveService {
     });
 
     const totalDays = requests.reduce((sum, r) => sum + r.days, 0);
-    const dailyRate = params.baseSalary / params.workingDaysInMonth;
-    const deduction = Math.round(dailyRate * totalDays);
+    const dailyRate = roundMoney(params.baseSalary / params.workingDaysInMonth, 2);
+    const deduction = roundMoney(dailyRate * totalDays, 2);
 
     return {
       totalDays,

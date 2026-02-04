@@ -10,6 +10,7 @@ import type {
   OvertimeBonusResult,
   OvertimeOccurrence,
 } from '../types.js';
+import { roundMoney } from '../../utils/money.js';
 
 // ============================================================================
 // Daily Overtime
@@ -41,7 +42,7 @@ export function calculateDailyOvertime(
   // Calculate EXTRA pay (multiplier - 1)
   // e.g., 1.5x means 0.5x extra on top of regular pay
   const extraMultiplier = multiplier - 1;
-  const bonus = Math.round(overtimeHours * hourlyRate * extraMultiplier);
+  const bonus = roundMoney(overtimeHours * hourlyRate * extraMultiplier, 2);
 
   return { amount: bonus, overtimeHours };
 }
@@ -117,7 +118,7 @@ export function calculateWeekendPremium(
   day: 'saturday' | 'sunday'
 ): { amount: number; hours: number; day: string } {
   const extraMultiplier = multiplier - 1;
-  const bonus = Math.round(hours * hourlyRate * extraMultiplier);
+  const bonus = roundMoney(hours * hourlyRate * extraMultiplier, 2);
 
   return { amount: bonus, hours, day };
 }
@@ -143,7 +144,7 @@ export function calculateNightShiftDifferential(
   hourlyRate: number
 ): { amount: number; hours: number } {
   const extraMultiplier = multiplier - 1;
-  const bonus = Math.round(hours * hourlyRate * extraMultiplier);
+  const bonus = roundMoney(hours * hourlyRate * extraMultiplier, 2);
 
   return { amount: bonus, hours };
 }
@@ -214,16 +215,16 @@ export function calculateOvertimeBonus(input: {
         case 'daily':
         case 'weekly':
         case 'monthly':
-          bonus = Math.round(occ.hours * hourlyRate * extraMultiplier);
+          bonus = roundMoney(occ.hours * hourlyRate * extraMultiplier, 2);
           break;
 
         case 'weekend-saturday':
         case 'weekend-sunday':
-          bonus = Math.round(occ.hours * hourlyRate * extraMultiplier);
+          bonus = roundMoney(occ.hours * hourlyRate * extraMultiplier, 2);
           break;
 
         case 'night-shift':
-          bonus = Math.round(occ.hours * hourlyRate * extraMultiplier);
+          bonus = roundMoney(occ.hours * hourlyRate * extraMultiplier, 2);
           break;
       }
 
@@ -290,7 +291,7 @@ export function calculateOvertimeBonus(input: {
   }
 
   return {
-    amount: Math.round(totalBonus),
+    amount: roundMoney(totalBonus, 2),
     hours: totalHours,
     breakdown,
   };

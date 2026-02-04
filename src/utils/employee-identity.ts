@@ -52,45 +52,9 @@ export function detectEmployeeIdType(
   return 'string';
 }
 
-/**
- * Build employee query based on identifier type
- *
- * Automatically detects if employeeId is ObjectId or string
- * and builds the appropriate MongoDB query filter.
- *
- * @param employeeId - Employee identifier (ObjectId or string)
- * @param organizationId - Organization ID for multi-tenant isolation
- * @returns Query filter for MongoDB
- *
- * @example
- * // By ObjectId _id
- * const query = buildEmployeeQuery(employee._id, org._id);
- * // Returns: { _id: ObjectId(...), organizationId: ObjectId(...) }
- *
- * @example
- * // By string employeeId
- * const query = buildEmployeeQuery("EMP-001", org._id);
- * // Returns: { employeeId: "EMP-001", organizationId: ObjectId(...) }
- */
-export function buildEmployeeQuery(
-  employeeId: ObjectIdLike | string,
-  organizationId: Types.ObjectId
-): EmployeeQueryFilter {
-  const idType = detectEmployeeIdType(employeeId);
-
-  if (idType === 'objectId') {
-    return {
-      _id: toObjectId(employeeId as ObjectIdLike),
-      organizationId,
-    };
-  }
-
-  // String business identifier
-  return {
-    employeeId: employeeId as string,
-    organizationId,
-  };
-}
+// NOTE: buildEmployeeQuery has been removed from this file.
+// Use buildEmployeeQuery from query-builders.ts instead, which has a more flexible API.
+// The removed function duplicated functionality and was intentionally not exported.
 
 /**
  * Normalize employee identifier to consistent format

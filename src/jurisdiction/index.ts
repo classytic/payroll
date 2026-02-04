@@ -172,27 +172,27 @@ export function extendJurisdiction(
     tax: {
       ...base.tax,
       ...(overrides.tax || {}),
-    } as any,
+    } as import('./types.js').TaxConfiguration,
     overtime: {
       ...base.overtime,
       ...(overrides.overtime || {}),
-    } as any,
+    } as import('./types.js').OvertimeConfiguration,
     leave: {
       ...base.leave,
       ...(overrides.leave || {}),
-    } as any,
+    } as import('./types.js').LeaveEntitlement,
     wage: {
       ...base.wage,
       ...(overrides.wage || {}),
-    } as any,
+    } as import('./types.js').WageConfiguration,
     workingHours: {
       ...base.workingHours,
       ...(overrides.workingHours || {}),
-    } as any,
+    } as import('./types.js').WorkingHoursConfiguration,
     complianceRules: overrides.complianceRules || base.complianceRules,
     metadata: {
       ...base.metadata,
       ...(overrides.metadata || {}),
-    } as any,
+    } as NonNullable<import('./types.js').JurisdictionDefinition['metadata']>,
   };
 }

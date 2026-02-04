@@ -370,7 +370,7 @@ export function employeePlugin(
      */
     schema.virtual('canTakeLeave').get(function (this: Document & Record<string, unknown>) {
       const status = this[statusField] as EmployeeStatus;
-      return status === 'active' && ((this as any).availableLeave as number) > 0;
+      return status === 'active' && (((this as Record<string, unknown>).availableLeave as number) > 0);
     });
 
     /**

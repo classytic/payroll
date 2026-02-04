@@ -397,16 +397,16 @@ describe('calculateShiftCompliance', () => {
 
     // Late penalty: 2 * $50 = $100
     // Early penalty: 1 * $75 = $75
-    // Overtime: (13 - 8) hours * 125 * 0.5 = 5 * 125 * 0.5 = $313 (rounded)
+    // Overtime: (13 - 8) hours * 125 * 0.5 = 5 * 125 * 0.5 = $312.50 (2-decimal precision)
     // Total penalties: $175
-    // Total bonuses: $313
-    // Net adjustment: $313 - $175 = $138
+    // Total bonuses: $312.50
+    // Net adjustment: $312.50 - $175 = $137.50
     expect(result.latePenalty.amount).toBe(100);
     expect(result.earlyDeparturePenalty.amount).toBe(75);
     expect(result.totalPenalties).toBe(175);
-    expect(result.overtimeBonus.amount).toBe(313);
-    expect(result.totalBonuses).toBe(313);
-    expect(result.netAdjustment).toBe(138);
+    expect(result.overtimeBonus.amount).toBe(312.5);
+    expect(result.totalBonuses).toBe(312.5);
+    expect(result.netAdjustment).toBe(137.5);
     expect(result.policyName).toBe('Test Policy');
   });
 

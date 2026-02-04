@@ -33,13 +33,14 @@ import {
 } from '../factories/compensation.factory.js';
 import { toObjectId } from '../utils/query-builders.js';
 import { logger } from '../utils/logger.js';
+import { roundMoney } from '../utils/money.js';
 
 // ============================================================================
 // Compensation Service (Mongokit Refactored)
 // ============================================================================
 
-export class CompensationService {
-  constructor(private readonly employeeRepo: Repository<EmployeeDocument>) {}
+export class CompensationService<T extends EmployeeDocument = EmployeeDocument> {
+  constructor(private readonly employeeRepo: Repository<T>) {}
 
   /**
    * Get employee compensation
@@ -414,12 +415,12 @@ export class CompensationService {
     return {
       department,
       employeeCount: stats.employeeCount,
-      totalBase: Math.round(stats.totalBase || 0),
-      totalGross: Math.round(stats.totalGross || 0),
-      totalNet: Math.round(stats.totalNet || 0),
-      averageBase: Math.round(stats.avgBase || 0),
-      averageGross: Math.round(stats.avgGross || 0),
-      averageNet: Math.round(stats.avgNet || 0),
+      totalBase: roundMoney(stats.totalBase || 0, 2),
+      totalGross: roundMoney(stats.totalGross || 0, 2),
+      totalNet: roundMoney(stats.totalNet || 0, 2),
+      averageBase: roundMoney(stats.avgBase || 0, 2),
+      averageGross: roundMoney(stats.avgGross || 0, 2),
+      averageNet: roundMoney(stats.avgNet || 0, 2),
     };
   }
 
@@ -517,18 +518,18 @@ export class CompensationService {
     (results[0]?.byDepartment || []).forEach((dept) => {
       byDepartment[dept._id] = {
         count: dept.count,
-        totalNet: Math.round(dept.totalNet || 0),
+        totalNet: roundMoney(dept.totalNet || 0, 2),
       };
     });
 
     return {
       employeeCount: overallStats.employeeCount,
-      totalBase: Math.round(overallStats.totalBase || 0),
-      totalGross: Math.round(overallStats.totalGross || 0),
-      totalNet: Math.round(overallStats.totalNet || 0),
-      averageBase: Math.round(overallStats.avgBase || 0),
-      averageGross: Math.round(overallStats.avgGross || 0),
-      averageNet: Math.round(overallStats.avgNet || 0),
+      totalBase: roundMoney(overallStats.totalBase || 0, 2),
+      totalGross: roundMoney(overallStats.totalGross || 0, 2),
+      totalNet: roundMoney(overallStats.totalNet || 0, 2),
+      averageBase: roundMoney(overallStats.avgBase || 0, 2),
+      averageGross: roundMoney(overallStats.avgGross || 0, 2),
+      averageNet: roundMoney(overallStats.avgNet || 0, 2),
       byDepartment,
     };
   }
@@ -567,8 +568,8 @@ export class CompensationService {
 /**
  * Create compensation service instance
  */
-export function createCompensationService(
-  employeeRepo: Repository<EmployeeDocument>
-): CompensationService {
-  return new CompensationService(employeeRepo);
+export function createCompensationService<T extends EmployeeDocument = EmployeeDocument>(
+  employeeRepo: Repository<T>
+): CompensationService<T> {
+  return new CompensationService<T>(employeeRepo);
 }

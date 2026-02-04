@@ -24,7 +24,7 @@
  * ```
  */
 
-import { Schema, type SchemaDefinition } from 'mongoose';
+import { Schema, type SchemaDefinition, type Document, type Model, type Types } from 'mongoose';
 
 // ============================================================================
 // Sub-Schema Definitions
@@ -439,7 +439,7 @@ AttendancePolicySchema.index({ effectiveFrom: 1, effectiveTo: 1 });
 /**
  * Instance method: Check if policy is currently active
  */
-AttendancePolicySchema.methods.isCurrentlyActive = function (this: any): boolean {
+AttendancePolicySchema.methods.isCurrentlyActive = function (this: Document & { active: boolean; effectiveFrom: Date; effectiveTo?: Date | null }): boolean {
   if (!this.active) return false;
 
   const now = new Date();
@@ -453,8 +453,8 @@ AttendancePolicySchema.methods.isCurrentlyActive = function (this: any): boolean
  * Static method: Find active policy for an organization
  */
 AttendancePolicySchema.statics.findActiveForOrganization = function (
-  this: any,
-  organizationId: any,
+  this: Model<Document>,
+  organizationId: Types.ObjectId,
   date: Date = new Date()
 ) {
   return this.findOne({
@@ -483,7 +483,7 @@ export interface AttendancePolicyDocument {
  * Static methods interface
  */
 export interface AttendancePolicyModel {
-  findActiveForOrganization(organizationId: any, date?: Date): Promise<any>;
+  findActiveForOrganization(organizationId: Types.ObjectId, date?: Date): Promise<Document | null>;
 }
 
 // ============================================================================

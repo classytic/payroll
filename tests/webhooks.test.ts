@@ -25,7 +25,17 @@ describe('Webhooks (Stripe-style)', () => {
     await mongoose.connect(mongoServer.getUri());
 
     // Mock startSession for tests (MongoMemoryServer doesn't support transactions)
-    mongoose.startSession = (async () => null) as any;
+    // Return mock session that triggers fallback to non-transactional mode
+    const mockSession = {
+      startTransaction: () => {
+        throw new Error('Transaction numbers are only allowed on a replica set member');
+      },
+      commitTransaction: async () => {},
+      abortTransaction: async () => {},
+      endSession: () => {},
+      inTransaction: () => false,
+    };
+    mongoose.startSession = (async () => mockSession) as any;
 
     // Create User model (referenced by Employee)
     const userSchema = new Schema({ name: String, email: String });

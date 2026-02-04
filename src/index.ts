@@ -58,6 +58,9 @@ export type {
   EmployeeIdentityMode,
   EmployeeIdMode,
   TaxBracket,
+  TaxCalculationOptions,
+  PreTaxDeductionInput,
+  TaxCreditInput,
   SalaryBandRange,
   RoleMappingConfig,
 
@@ -141,7 +144,7 @@ export type {
   TaxCalculationResult,
   CompensationBreakdownResult,
 
-  // Plugin types
+  // Plugin types (legacy - prefer PayrollPluginDefinition)
   PayrollPlugin,
   PluginFunction,
   PluginType,
@@ -217,6 +220,17 @@ export {
 export {
   multiTenantPlugin,
 } from './core/repository-plugins.js';
+
+// ============================================================================
+// Plugin System (v2.4.0+)
+// ============================================================================
+
+export {
+  type PayrollPluginDefinition,
+  type PluginContext,
+  type PluginHooks,
+  definePlugin,
+} from './core/plugin.js';
 
 // ============================================================================
 // Timeline Audit Integration (@classytic/mongoose-timeline-audit)
@@ -310,6 +324,8 @@ export {
   createEmploymentFields,
   createPayrollRecordFields,
   // Index helpers
+  employeeIndexes,
+  payrollRecordIndexes,
   applyEmployeeIndexes,
   applyPayrollRecordIndexes,
   // Schema factory functions
@@ -419,29 +435,9 @@ export {
 // Leave Service (INTERNAL ONLY - NOT EXPORTED)
 // ============================================================================
 
-// LeaveService is intentionally NOT exported because:
-// 1. Uses findById() without org isolation (lines 443, 555, 789)
-// 2. organizationId is optional in single-tenant mode (footgun for multi-tenant)
-// 3. For multi-tenant safe operations, use Payroll class leave methods:
-//    - payroll.requestLeave()
-//    - payroll.reviewLeaveRequest()
-//    - payroll.cancelLeaveRequest()
-//    - payroll.getLeaveHistory()
-//
-// LeaveService is for internal use by the Payroll class only.
-
-// export {
-//   LeaveService,
-//   createLeaveService,
-//   type LeaveServiceConfig,
-//   type RequestLeaveParams,
-//   type ReviewLeaveParams,
-//   type CancelLeaveParams,
-//   type LeaveForPayrollParams,
-//   type LeaveRequestResult,
-//   type ReviewResult,
-//   type OverlapCheckResult,
-// } from './services/index.js';
+// LeaveService is internal-only. Use Payroll class leave methods:
+//   payroll.requestLeave(), payroll.reviewLeaveRequest(),
+//   payroll.cancelLeaveRequest(), payroll.getLeaveHistory()
 
 // ============================================================================
 // Pure Calculators
@@ -631,20 +627,9 @@ export {
 // Tax Withholding Service (INTERNAL ONLY - NOT EXPORTED)
 // ============================================================================
 
-// TaxWithholdingService is intentionally NOT exported for API consistency.
-// All tax withholding operations are available via Payroll class methods:
-//   - payroll.getPendingTaxWithholdings()
-//   - payroll.getTaxSummary()
-//   - payroll.markTaxWithholdingsPaid()
-//
-// TaxWithholdingService is for internal use by the Payroll class only.
-
-// export {
-//   TaxWithholdingService,
-//   createTaxWithholdingService,
-//   type TaxWithholdingServiceConfig,
-//   type CreateFromBreakdownParams,
-// } from './services/index.js';
+// TaxWithholdingService is internal-only. Use Payroll class methods:
+//   payroll.getPendingTaxWithholdings(), payroll.getTaxSummary(),
+//   payroll.markTaxWithholdingsPaid()
 
 // ============================================================================
 // Security Utilities (Multi-Tenant Isolation)
@@ -687,3 +672,61 @@ export {
   type EmployeeIdType,
   type EmployeeQueryFilter,
 } from './utils/index.js';
+
+// ============================================================================
+// Type Guards & Error Helpers (DX Utilities)
+// ============================================================================
+
+/**
+ * @since v2.7.0
+ * Type-safe error checking and employee type guards.
+ * Also available from '@classytic/payroll/utils'.
+ */
+export {
+  isMongoError,
+  isDuplicateKeyError,
+  parseDuplicateKeyError,
+  isTransactionError,
+  isTransactionUnsupportedError,
+  isConnectionError,
+  isGuestEmployee,
+  hasUserId,
+  isValidationError,
+  isError,
+  getErrorMessage,
+} from './utils/type-guards.js';
+
+export {
+  getEmployeeEmail,
+  getEmployeeName,
+} from './utils/employee-type-guards.js';
+
+/**
+ * @since v2.7.5
+ * Higher-level error handling utilities for common payroll scenarios.
+ */
+export {
+  handleTransactionError,
+  handleDuplicateKeyError,
+  handlePayrollError,
+  formatUserError,
+  type TransactionErrorResult,
+  type DuplicateKeyErrorResult,
+  type PayrollErrorResult,
+} from './utils/error-helpers.js';
+
+// ============================================================================
+// Mongokit Audit Plugins
+// ============================================================================
+
+/**
+ * @since v2.7.0
+ * Repository plugins for audit trail tracking.
+ */
+export {
+  payrollAuditPlugin,
+  readAuditPlugin,
+  fullAuditPlugin,
+  type AuditContext,
+  type AuditEvent,
+} from './core/mongokit-plugins/index.js';

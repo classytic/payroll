@@ -37,6 +37,10 @@ export interface TaxBracket {
   rate: number;
   /** Fixed amount for this bracket (some jurisdictions use fixed + %) */
   fixedAmount?: number;
+  /** Start date from which this bracket applies (inclusive) */
+  effectiveFrom?: Date;
+  /** End date until which this bracket applies (inclusive, null = still active) */
+  effectiveTo?: Date | null;
 }
 
 export interface TaxConfiguration {
@@ -76,6 +80,35 @@ export interface TaxConfiguration {
   };
   /** Standard deduction (annual) */
   standardDeduction?: number;
+
+  /**
+   * Tax-free thresholds by taxpayer category (annual)
+   *
+   * Different jurisdictions offer varying tax-free amounts based on
+   * taxpayer demographics (age, disability status, veteran status, etc.)
+   *
+   * @example
+   * ```typescript
+   * thresholdsByCategory: {
+   *   standard: 350000,    // Default for regular taxpayers
+   *   senior: 450000,      // Citizens 65+
+   *   disabled: 500000,    // Disabled persons
+   *   veteran: 475000,     // Military veterans
+   *   female: 400000,      // Some jurisdictions (e.g., Bangladesh)
+   * }
+   * ```
+   */
+  thresholdsByCategory?: Record<string, number>;
+
+  /**
+   * Pre-tax deduction types recognized by this jurisdiction
+   *
+   * Contributions of these types reduce taxable income before tax calculation.
+   * Common examples: provident fund, 401k, pension contributions.
+   *
+   * @example ['provident_fund', 'pension', '401k', 'health_savings']
+   */
+  preTaxDeductionTypes?: string[];
 }
 
 export interface TaxCalculationInput {
@@ -245,6 +278,7 @@ export interface EmploymentData {
   };
   hireDate: Date;
   terminationDate?: Date;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- extensible interface with dynamic property access
   [key: string]: any;
 }
 
@@ -426,7 +460,7 @@ export interface PaySlipTemplate {
   /** Optional fields */
   optionalFields?: string[];
   /** Custom template function */
-  customRenderer?: (data: PaySlipData) => any;
+  customRenderer?: (data: PaySlipData) => unknown;
 }
 
 // ============================================================================
@@ -443,9 +477,9 @@ export interface StatutoryFilingRequirement {
   /** Required data */
   requiredData: string[];
   /** Generate filing data */
-  generateData: (employees: any[], period: { start: Date; end: Date }) => any;
+  generateData: (employees: EmploymentData[], period: { start: Date; end: Date }) => unknown;
   /** Validation rules */
-  validate?: (data: any) => ComplianceViolation[];
+  validate?: (data: unknown) => ComplianceViolation[];
 }
 
 export interface FilingCalendar {

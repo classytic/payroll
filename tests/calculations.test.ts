@@ -176,91 +176,145 @@ describe('calculateAttendanceDeduction', () => {
   const dailyRate = 5000;
 
   it('should calculate deduction for absent days', () => {
-    const result = calculateAttendanceDeduction(22, 20, dailyRate);
-    expect(result).toBe(10000); // 2 days * 5000
+    const result = calculateAttendanceDeduction({
+      expectedWorkingDays: 22,
+      actualWorkingDays: 20,
+      dailyRate,
+    });
+    expect(result.deductionAmount).toBe(10000); // 2 days * 5000
+    expect(result.absentDays).toBe(2);
+    expect(result.hasDeduction).toBe(true);
   });
 
   it('should return zero when fully present', () => {
-    const result = calculateAttendanceDeduction(22, 22, dailyRate);
-    expect(result).toBe(0);
+    const result = calculateAttendanceDeduction({
+      expectedWorkingDays: 22,
+      actualWorkingDays: 22,
+      dailyRate,
+    });
+    expect(result.deductionAmount).toBe(0);
+    expect(result.absentDays).toBe(0);
+    expect(result.hasDeduction).toBe(false);
   });
 
-  it('should respect maxDeductionPercent', () => {
-    // All absent but max 50%
-    const result = calculateAttendanceDeduction(22, 0, dailyRate, 50);
-    const max = 22 * dailyRate * 0.5;
-    expect(result).toBe(max);
+  it('should calculate full deduction when all days absent', () => {
+    const result = calculateAttendanceDeduction({
+      expectedWorkingDays: 22,
+      actualWorkingDays: 0,
+      dailyRate,
+    });
+    expect(result.deductionAmount).toBe(22 * dailyRate);
+    expect(result.absentDays).toBe(22);
+    expect(result.hasDeduction).toBe(true);
   });
 });
 
 // ============================================================================
-// calculateSalaryBreakdown Tests
+// calculateSalaryBreakdown Tests (Production Calculator)
 // ============================================================================
 
 describe('calculateSalaryBreakdown', () => {
-  const baseParams = {
-    baseSalary: 100000,
-    hireDate: new Date('2024-01-01'),
-    periodStart: new Date('2024-03-01'),
-    periodEnd: new Date('2024-03-31'),
+  // Tax brackets for testing: progressive tax starting at 600k annual
+  const testTaxBrackets = [
+    { min: 0, max: 600000, rate: 0 },
+    { min: 600000, max: 1200000, rate: 0.1 },
+    { min: 1200000, max: Infinity, rate: 0.2 },
+  ];
+
+  // Base test config
+  const baseConfig = {
+    allowProRating: true,
+    autoDeductions: true,
+    defaultCurrency: 'USD',
+    attendanceIntegration: true,
   };
 
-  it('should calculate basic salary correctly', () => {
-    const result = calculateSalaryBreakdown(baseParams);
+  // Base period (March 2024)
+  const basePeriod = {
+    month: 3,
+    year: 2024,
+    startDate: new Date('2024-03-01'),
+    endDate: new Date('2024-03-31'),
+  };
 
-    expect(result.baseSalary).toBe(100000);
-    expect(result.proratedBase).toBe(100000);
+  // Helper to create base params
+  const createBaseParams = () => ({
+    employee: {
+      hireDate: new Date('2024-01-01'),
+      compensation: {
+        baseAmount: 100000,
+        frequency: 'monthly' as const,
+        currency: 'USD',
+        allowances: [] as Array<{ type: string; amount: number; taxable?: boolean }>,
+        deductions: [] as Array<{ type: string; amount: number; auto?: boolean }>,
+      },
+    },
+    period: basePeriod,
+    config: baseConfig,
+    taxBrackets: testTaxBrackets,
+  });
+
+  it('should calculate basic salary correctly', () => {
+    const result = calculateSalaryBreakdown(createBaseParams());
+
+    expect(result.baseAmount).toBe(100000);
     expect(result.grossSalary).toBe(100000);
-    expect(result.proration.isProrated).toBe(false);
+    expect(result.proRatedAmount).toBe(0); // Not prorated
   });
 
   it('should include allowances in gross', () => {
-    const result = calculateSalaryBreakdown({
-      ...baseParams,
-      allowances: [
-        { type: 'housing', amount: 20000, taxable: true },
-        { type: 'transport', amount: 5000, taxable: true },
-      ],
-    });
+    const params = createBaseParams();
+    params.employee.compensation.allowances = [
+      { type: 'housing', amount: 20000, taxable: true },
+      { type: 'transport', amount: 5000, taxable: true },
+    ];
+    const result = calculateSalaryBreakdown(params);
 
-    expect(result.totalAllowances).toBe(25000);
+    const totalAllowances = result.allowances.reduce((sum, a) => sum + a.amount, 0);
+    expect(totalAllowances).toBe(25000);
     expect(result.grossSalary).toBe(125000);
   });
 
   it('should apply deductions', () => {
-    const result = calculateSalaryBreakdown({
-      ...baseParams,
-      deductions: [{ type: 'provident_fund', amount: 5000 }],
-    });
+    const params = createBaseParams();
+    params.employee.compensation.deductions = [
+      { type: 'provident_fund', amount: 5000, auto: true },
+    ];
+    const result = calculateSalaryBreakdown(params);
 
-    expect(result.totalDeductions).toBe(5000);
+    // Deductions include provident_fund and tax
+    const nonTaxDeductions = result.deductions.filter(d => d.type !== 'tax');
+    const totalNonTax = nonTaxDeductions.reduce((sum, d) => sum + d.amount, 0);
+    expect(totalNonTax).toBe(5000);
     expect(result.netSalary).toBeLessThan(result.grossSalary);
   });
 
   it('should prorate for new hire', () => {
-    const result = calculateSalaryBreakdown({
-      ...baseParams,
-      hireDate: new Date('2024-03-15'),
-    });
+    const params = createBaseParams();
+    params.employee.hireDate = new Date('2024-03-15');
+    const result = calculateSalaryBreakdown(params);
 
-    expect(result.proration.isProrated).toBe(true);
-    expect(result.proratedBase).toBeLessThan(result.baseSalary);
+    expect(result.proRatedAmount).toBeGreaterThan(0);
+    expect(result.baseAmount).toBeLessThan(100000);
   });
 
   it('should prorate allowances', () => {
-    const result = calculateSalaryBreakdown({
-      ...baseParams,
-      hireDate: new Date('2024-03-15'),
-      allowances: [{ type: 'housing', amount: 20000 }],
-    });
+    const params = createBaseParams();
+    params.employee.hireDate = new Date('2024-03-15');
+    params.employee.compensation.allowances = [
+      { type: 'housing', amount: 20000, taxable: true },
+    ];
+    const result = calculateSalaryBreakdown(params);
 
     // Allowances should also be prorated
-    expect(result.totalAllowances).toBeLessThan(20000);
+    const totalAllowances = result.allowances.reduce((sum, a) => sum + a.amount, 0);
+    expect(totalAllowances).toBeLessThan(20000);
   });
 
   it('should apply attendance deduction', () => {
+    const params = createBaseParams();
     const result = calculateSalaryBreakdown({
-      ...baseParams,
+      ...params,
       attendance: { expectedDays: 22, actualDays: 20 },
     });
 
@@ -268,9 +322,10 @@ describe('calculateSalaryBreakdown', () => {
   });
 
   it('should skip tax when requested', () => {
-    const withTax = calculateSalaryBreakdown(baseParams);
+    const params = createBaseParams();
+    const withTax = calculateSalaryBreakdown(params);
     const withoutTax = calculateSalaryBreakdown({
-      ...baseParams,
+      ...params,
       options: { skipTax: true },
     });
 
@@ -279,64 +334,71 @@ describe('calculateSalaryBreakdown', () => {
   });
 
   it('should skip proration when requested', () => {
+    const params = createBaseParams();
+    params.employee.hireDate = new Date('2024-03-15');
     const result = calculateSalaryBreakdown({
-      ...baseParams,
-      hireDate: new Date('2024-03-15'),
+      ...params,
       options: { skipProration: true },
     });
 
-    expect(result.proration.isProrated).toBe(false);
-    expect(result.proratedBase).toBe(100000);
+    expect(result.proRatedAmount).toBe(0);
+    expect(result.baseAmount).toBe(100000);
   });
 
   it('should not tax non-taxable allowances', () => {
-    const taxable = calculateSalaryBreakdown({
-      ...baseParams,
-      allowances: [{ type: 'bonus', amount: 10000, taxable: true }],
-    });
-    const nonTaxable = calculateSalaryBreakdown({
-      ...baseParams,
-      allowances: [{ type: 'meal', amount: 10000, taxable: false }],
-    });
+    const paramsWithTaxable = createBaseParams();
+    paramsWithTaxable.employee.compensation.allowances = [
+      { type: 'bonus', amount: 10000, taxable: true },
+    ];
+    const taxable = calculateSalaryBreakdown(paramsWithTaxable);
+
+    const paramsWithNonTaxable = createBaseParams();
+    paramsWithNonTaxable.employee.compensation.allowances = [
+      { type: 'meal', amount: 10000, taxable: false },
+    ];
+    const nonTaxable = calculateSalaryBreakdown(paramsWithNonTaxable);
 
     // Tax should be lower when allowance is not taxable
-    expect(nonTaxable.taxAmount).toBeLessThan(taxable.taxAmount);
+    expect(nonTaxable.taxAmount).toBeLessThan(taxable.taxAmount!);
   });
 
-  it('should include attendance deduction in totalDeductions', () => {
+  it('should include attendance deduction in deductions array', () => {
+    const params = createBaseParams();
+    params.employee.compensation.deductions = [
+      { type: 'provident_fund', amount: 5000, auto: true },
+    ];
     const result = calculateSalaryBreakdown({
-      ...baseParams,
+      ...params,
       attendance: { expectedDays: 22, actualDays: 20 }, // 2 days absent
-      deductions: [{ type: 'provident_fund', amount: 5000 }],
     });
 
-    // totalDeductions should include both provident fund AND attendance
-    // NOT just provident fund
+    // Deductions array should include provident_fund, attendance (absence), and tax
     expect(result.attendanceDeduction).toBeGreaterThan(0);
-    expect(result.totalDeductions).toBe(
-      5000 + result.attendanceDeduction
-    );
+    const nonTaxDeductions = result.deductions.filter(d => d.type !== 'tax');
+    const totalNonTax = nonTaxDeductions.reduce((sum, d) => sum + d.amount, 0);
+    expect(totalNonTax).toBe(5000 + (result.attendanceDeduction || 0));
   });
 
-  it('should exclude only tax from totalDeductions (not attendance)', () => {
+  it('should correctly compute netSalary from gross minus all deductions', () => {
+    const params = createBaseParams();
+    params.employee.compensation.deductions = [
+      { type: 'provident_fund', amount: 3000, auto: true },
+      { type: 'insurance', amount: 2000, auto: true },
+    ];
     const result = calculateSalaryBreakdown({
-      ...baseParams,
+      ...params,
       attendance: { expectedDays: 22, actualDays: 18 }, // 4 days absent
-      deductions: [
-        { type: 'provident_fund', amount: 3000 },
-        { type: 'insurance', amount: 2000 },
-      ],
     });
 
-    // totalDeductions = provident_fund + insurance + attendance
-    // totalDeductions excludes ONLY tax, not attendance
-    const expectedTotal = 3000 + 2000 + result.attendanceDeduction;
-    expect(result.totalDeductions).toBe(expectedTotal);
+    // Deductions include provident_fund, insurance, absence, and tax
+    const nonTaxDeductions = result.deductions.filter(d => d.type !== 'tax');
+    const totalNonTax = nonTaxDeductions.reduce((sum, d) => sum + d.amount, 0);
+    const expectedNonTax = 3000 + 2000 + (result.attendanceDeduction || 0);
+    expect(totalNonTax).toBe(expectedNonTax);
 
-    // Verify attendance is NOT counted separately in netSalary
-    expect(result.netSalary).toBe(
-      result.grossSalary - result.totalDeductions - result.taxAmount
-    );
+    // Net salary = gross - all deductions (including tax)
+    const totalAllDeductions = result.deductions.reduce((sum, d) => sum + d.amount, 0);
+    expect(result.netSalary).toBe(result.grossSalary - totalAllDeductions);
   });
 });
 

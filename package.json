@@ -1,6 +1,6 @@
 {
   "name": "@classytic/payroll",
-  "version": "2.6.2",
+  "version": "2.8.0",
   "description": "Modern HRM and payroll management for Mongoose - Plugin-based, event-driven, multi-tenant ready. Salary processing, compensation management, tax calculations, and employee lifecycle management.",
   "type": "module",
   "sideEffects": false,
@@ -23,6 +23,10 @@
     "./calculators": {
       "types": "./dist/calculators/index.d.ts",
       "default": "./dist/calculators/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "default": "./dist/core/index.js"
     }
   },
   "files": [
@@ -65,7 +69,9 @@
     "@classytic/clockin": "^2.2.0",
     "@classytic/mongokit": "^3.0.0",
     "@classytic/shared-types": "^1.0.0",
-    "mongoose": "^8.0.0 || ^9.0.0"
+    "mongoose": "^8.0.0 || ^9.0.0",
+    "lru-cache": "^11.0.0",
+    "p-limit": "^6.0.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
     "@classytic/clockin": {
@@ -73,13 +79,15 @@
     }
   },
   "devDependencies": {
-    "@classytic/clockin": "file:../clockin",
-    "@classytic/mongokit": "file:../mongokit",
+    "@classytic/clockin": "^2.2.0",
+    "@classytic/mongokit": "^3.0.0",
     "@classytic/shared-types": "^1.0.0",
     "@types/node": "^22.8.7",
     "@vitest/coverage-v8": "^3.2.4",
+    "lru-cache": "^11.2.4",
     "mongodb-memory-server": "^10.0.0",
     "mongoose": "^9.0.0",
+    "p-limit": "^7.2.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
@@ -91,20 +99,18 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:local": "node scripts/test-local.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:exports": "node scripts/test-exports.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck",
+    "prepublishOnly": "npm run build && npm run typecheck && npm run test:exports",
     "publish:dry": "npm publish --dry-run --access public",
     "publish:npm": "npm publish --access public",
-    "release": "npm run build && npm run typecheck && npm publish --access public",
+    "release": "npm run build && npm run typecheck && npm run test:exports && npm publish --access public",
     "release:patch": "npm version patch && npm run release",
     "release:minor": "npm version minor && npm run release",
     "release:major": "npm version major && npm run release"
-  },
-  "dependencies": {
-    "lru-cache": "^11.2.4",
-    "p-limit": "^7.2.0"
   }
 }

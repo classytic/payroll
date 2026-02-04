@@ -1,510 +1,615 @@
 # API Reference
 
-## Installation
+## Payroll Class
 
-```bash
-npm install @classytic/payroll mongoose
-```
-
-## Quick Start
+The main entry point. All operations go through this class with multi-tenant isolation.
 
 ```typescript
 import { createPayrollInstance } from '@classytic/payroll';
 
 const payroll = createPayrollInstance()
   .withModels({ EmployeeModel, PayrollRecordModel, TransactionModel })
+  .withConfig({ currency: 'USD' })
   .build();
 ```
 
-## Employee Management
+---
 
-### Hire Employee
+## Employee Operations
+
+### hire
 
 ```typescript
 await payroll.hire({
-  organizationId,
+  organizationId: ObjectId,
   employment: {
-    email: 'john@company.com',
-    employeeId: 'EMP-001',
-    position: 'Engineer',
-    department: 'it',
-    hireDate: new Date(),
+    email: string,
+    employeeId?: string,           // Auto-generated if not provided
+    position: string,
+    department?: string,
+    hireDate: Date,
+    employmentType?: 'full_time' | 'part_time' | 'contract' | 'intern',
   },
   compensation: {
-    baseSalary: 80000,
-    currency: 'USD',
-    frequency: 'monthly',
+    baseAmount: number,         // Per-period amount (monthly salary, weekly wage, hourly rate, etc.)
+    currency: string,
+    frequency: 'monthly' | 'bi_weekly' | 'weekly' | 'daily' | 'hourly',
+    allowances?: Allowance[],
+    deductions?: Deduction[],
+  },
+  bankDetails?: {
+    accountNumber: string,
+    bankName: string,
+    routingNumber?: string,
   },
 });
+// Returns: EmployeeDocument
 ```
 
-### Update Employment
+### getEmployee
+
+```typescript
+const employee = await payroll.getEmployee({
+  employeeId: string | ObjectId,   // MongoDB _id or employeeId string
+  organizationId: ObjectId,
+  employeeIdMode?: 'auto' | 'employeeId' | 'objectId',  // Default: 'auto'
+});
+// Returns: EmployeeDocument | null
+```
+
+### updateEmployment
 
 ```typescript
 await payroll.updateEmployment({
-  employeeId,
+  employeeId: string | ObjectId,
   updates: {
-    position: 'Senior Engineer',
-    department: 'it',
+    position?: string,
+    department?: string,
+    employmentType?: 'full_time' | 'part_time' | 'contract' | 'intern',
   },
 });
+// Returns: EmployeeDocument
 ```
 
-### Terminate Employee
+### terminate
 
 ```typescript
 await payroll.terminate({
-  employeeId,
-  terminationDate: new Date(),
-  reason: 'resignation',
+  employeeId: string | ObjectId,
+  terminationDate: Date,
+  reason: 'resignation' | 'termination' | 'retirement' | 'layoff',
 });
+// Returns: EmployeeDocument
 ```
 
-### Re-hire Employee
+### reHire
 
 ```typescript
 await payroll.reHire({
-  employeeId,
-  hireDate: new Date(),
+  employeeId: string | ObjectId,
+  hireDate: Date,
 });
+// Returns: EmployeeDocument
 ```
 
-## Compensation
+---
 
-### Update Salary
+## Compensation Operations
+
+### updateSalary
 
 ```typescript
 await payroll.updateSalary({
-  employeeId,
+  employeeId: string | ObjectId,
+  organizationId: ObjectId,
   compensation: {
-    baseSalary: 90000,
+    baseAmount?: number,        // Per-period amount based on frequency
+    currency?: string,
+    frequency?: 'monthly' | 'bi_weekly' | 'weekly' | 'daily' | 'hourly',
   },
-  effectiveFrom: new Date(),
+  effectiveFrom?: Date,
 });
+// Returns: EmployeeDocument
 ```
 
-### Add Allowance
+### addAllowance
 
 ```typescript
 await payroll.addAllowance({
-  employeeId,
+  employeeId: string | ObjectId,
   allowance: {
-    type: 'housing',
-    amount: 2000,
-    taxable: true,
+    type: 'housing' | 'transport' | 'meal' | 'mobile' | 'medical' | 'bonus' | 'other',
+    amount: number,
+    taxable?: boolean,           // Default: true
+    recurring?: boolean,         // Default: true
+    effectiveFrom?: Date,
+    effectiveTo?: Date | null,
   },
 });
+// Returns: EmployeeDocument
 ```
 
-### Add Deduction
+### removeAllowance
+
+```typescript
+await payroll.removeAllowance({
+  employeeId: string | ObjectId,
+  allowanceType: AllowanceType,
+});
+// Returns: EmployeeDocument
+```
+
+### addDeduction
 
 ```typescript
 await payroll.addDeduction({
-  employeeId,
+  employeeId: string | ObjectId,
   deduction: {
-    type: 'loan',
-    amount: 500,
-    auto: true,
+    type: 'tax' | 'loan' | 'advance' | 'provident_fund' | 'insurance',
+    amount: number,
+    auto?: boolean,              // Auto-deduct each payroll
+    recurring?: boolean,
+    description?: string,
+    reducesTaxableIncome?: boolean,  // Pre-tax deduction
+    effectiveFrom?: Date,
+    effectiveTo?: Date | null,
   },
 });
+// Returns: EmployeeDocument
 ```
 
-### Update Bank Details
+### removeDeduction
+
+```typescript
+await payroll.removeDeduction({
+  employeeId: string | ObjectId,
+  deductionType: DeductionType,
+});
+// Returns: EmployeeDocument
+```
+
+### updateBankDetails
 
 ```typescript
 await payroll.updateBankDetails({
-  employeeId,
+  employeeId: string | ObjectId,
   bankDetails: {
-    accountNumber: '1234567890',
-    bankName: 'Example Bank',
-    routingNumber: 'ROUTE123',
+    accountNumber: string,
+    bankName: string,
+    routingNumber?: string,
   },
 });
+// Returns: EmployeeDocument
 ```
+
+---
 
 ## Payroll Processing
 
-### Process Single Salary
+### processSalary
 
 ```typescript
-await payroll.processSalary({
-  organizationId,
-  employeeId,
-  period: {
-    month: 1,
-    year: 2024,
+const result = await payroll.processSalary({
+  organizationId: ObjectId,
+  employeeId: string | ObjectId,
+  month: number,       // 1-12
+  year: number,
+  paymentDate?: Date,
+  paymentMethod?: 'bank' | 'cash' | 'check',
+  attendance?: {
+    expectedDays?: number,
+    actualDays?: number,
+  },
+  options?: {
+    holidays?: Date[],
+    skipTax?: boolean,
+    skipProration?: boolean,
+    skipAttendance?: boolean,
   },
 });
+
+// Returns ProcessSalaryResult
+{
+  employee: EmployeeDocument,
+  payrollRecord: PayrollRecordDocument,
+  transaction: TransactionDocument,
+}
 ```
 
-### Process Bulk Salaries
+### processBulkPayroll
 
 ```typescript
 const result = await payroll.processBulkPayroll({
-  organizationId,
-  employeeIds,
-  month: 1,
-  year: 2024,
-  batchSize: 50,
+  organizationId?: ObjectId,      // Optional if using context.organizationId or single-tenant
+  month: number,
+  year: number,
+  employeeIds?: ObjectId[],      // Default: all active employees
+  paymentDate?: Date,
+  paymentMethod?: 'bank' | 'cash' | 'check',
+  batchSize?: number,            // Default: 10
+  concurrency?: number,          // Default: 1 (sequential)
+  batchDelay?: number,           // Delay between batches (ms)
+  maxResultDetails?: number,     // Limit detailed results
+  useStreaming?: boolean,        // Auto-enabled for >10k employees
+  signal?: AbortSignal,          // Cancellation support
+  onProgress?: (progress: BulkPayrollProgress) => void,
+  options?: PayrollProcessingOptions,
 });
 
-console.log(`Processed: ${result.successful}, Failed: ${result.failed}`);
+// Returns BulkPayrollResult
+{
+  total: number,
+  successCount: number,
+  failCount: number,
+  totalAmount: number,
+  successful: Array<{ employeeId, amount, transactionId }>,
+  failed: Array<{ employeeId, error }>,
+}
+
+// Progress callback receives
+{
+  processed: number,
+  total: number,
+  successful: number,
+  failed: number,
+  percentage: number,
+  currentEmployee?: string,
+}
 ```
 
-### Bulk with Progress Tracking
+### voidPayroll
+
+Void an unpaid payroll record.
 
 ```typescript
-await payroll.processBulkPayroll({
-  organizationId,
-  employeeIds,
-  month: 1,
-  year: 2024,
-  onProgress: (progress) => {
-    console.log(`${progress.current}/${progress.total} - ${progress.percentage}%`);
-  },
+await payroll.voidPayroll({
+  organizationId: ObjectId,
+  payrollRecordId: ObjectId,
+  reason: string,
 });
+// Returns: VoidPayrollResult
 ```
+
+### reversePayroll
+
+Reverse a paid payroll (creates reversal transaction).
+
+```typescript
+await payroll.reversePayroll({
+  organizationId: ObjectId,
+  payrollRecordId: ObjectId,
+  reason: string,
+});
+// Returns: ReversePayrollResult
+```
+
+### restorePayroll
+
+Restore a voided payroll to pending.
+
+```typescript
+await payroll.restorePayroll({
+  organizationId: ObjectId,
+  payrollRecordId: ObjectId,
+  reason: string,
+});
+// Returns: RestorePayrollResult
+```
+
+---
 
 ## Leave Management
 
-### Request Leave
+### requestLeave
 
 ```typescript
 await payroll.requestLeave({
-  employeeId,
-  organizationId,
-  leaveType: 'sick',
-  startDate: new Date('2024-01-15'),
-  endDate: new Date('2024-01-17'),
-  reason: 'Medical appointment',
+  employeeId: string | ObjectId,
+  organizationId: ObjectId,
+  leaveType: 'annual' | 'sick' | 'casual' | 'maternity' | 'paternity' | 'unpaid',
+  startDate: Date,
+  endDate: Date,
+  reason?: string,
 });
+// Returns: LeaveRequestDocument
 ```
 
-### Approve Leave
+### approveLeave
 
 ```typescript
 await payroll.approveLeave({
-  leaveRequestId,
-  approverId: managerId,
+  leaveRequestId: ObjectId,
+  approverId: ObjectId,
+  notes?: string,
 });
+// Returns: LeaveRequestDocument
 ```
 
-### Reject Leave
+### rejectLeave
 
 ```typescript
 await payroll.rejectLeave({
-  leaveRequestId,
-  rejectedBy: managerId,
-  rejectionReason: 'Insufficient leave balance',
+  leaveRequestId: ObjectId,
+  rejectedBy: ObjectId,
+  rejectionReason: string,
 });
+// Returns: LeaveRequestDocument
 ```
 
-### Get Leave Balance
+### cancelLeaveRequest
+
+```typescript
+await payroll.cancelLeaveRequest({
+  leaveRequestId: ObjectId,
+  cancelledBy: ObjectId,
+  reason?: string,
+});
+// Returns: LeaveRequestDocument
+```
+
+### getLeaveBalance
 
 ```typescript
 const balance = await payroll.getLeaveBalance({
-  employeeId,
-  organizationId,
+  employeeId: string | ObjectId,
+  organizationId: ObjectId,
 });
 
-console.log(balance.annual); // { total: 20, used: 5, remaining: 15 }
+// Returns
+{
+  annual: { total: 20, used: 5, remaining: 15, pending: 2 },
+  sick: { total: 10, used: 2, remaining: 8, pending: 0 },
+  casual: { total: 5, used: 1, remaining: 4, pending: 0 },
+  // ...
+}
 ```
 
-## Queries with Pagination
-
-### Find Active Employees
+### getLeaveHistory
 
 ```typescript
-const result = await payroll.managers.employee.service.findActive({
-  page: 1,
-  limit: 100,
-  sort: '-createdAt',
+const history = await payroll.getLeaveHistory({
+  employeeId: string | ObjectId,
+  organizationId: ObjectId,
+  filters?: {
+    leaveType?: LeaveType,
+    status?: LeaveRequestStatus,
+    startDate?: Date,
+    endDate?: Date,
+  },
+  page?: number,
+  limit?: number,
 });
-
-console.log(result.docs); // Employee[]
-console.log(result.total); // Total count
-console.log(result.page); // Current page
+// Returns: { docs: LeaveRequestDocument[], total, page, limit }
 ```
 
-### Find by Department
-
-```typescript
-const result = await payroll.managers.employee.service.findByDepartment('it', {
-  page: 1,
-  limit: 50,
-});
-```
-
-### Find Eligible for Payroll
-
-```typescript
-const result = await payroll.managers.employee.service.findEligibleForPayroll({
-  page: 1,
-  limit: 100,
-});
-```
-
-### Department Stats (Aggregated)
-
-```typescript
-const stats = await payroll.managers.compensation.service.getDepartmentCompensationStats('it');
-
-console.log(stats.employeeCount); // 50
-console.log(stats.averageBase); // 75000
-console.log(stats.totalBase); // 3750000
-```
-
-### Organization Stats (Aggregated)
-
-```typescript
-const stats = await payroll.managers.compensation.service.getOrganizationCompensationStats();
-
-console.log(stats.employeeCount); // 200
-console.log(stats.byDepartment.it.count); // 50
-console.log(stats.byDepartment.hr.count); // 30
-```
-
-## Attendance Integration
-
-### Setup
-
-```typescript
-const payroll = createPayrollInstance()
-  .withModels({
-    EmployeeModel,
-    PayrollRecordModel,
-    TransactionModel,
-    AttendanceModel, // Optional
-  })
-  .withConfig({
-    payroll: { attendanceIntegration: true },
-  })
-  .build();
-```
-
-### Process with Attendance
-
-```typescript
-import { getAttendance } from '@classytic/payroll';
-
-const attendance = await getAttendance(AttendanceModel, {
-  employeeId,
-  organizationId,
-  year: 2024,
-  month: 1,
-});
-
-await payroll.processSalary({
-  organizationId,
-  employeeId,
-  period: { month: 1, year: 2024 },
-  attendance, // Explicit attendance
-});
-```
+---
 
 ## Events
 
-### Listen to Events
-
 ```typescript
-payroll.on('employee:hired', (payload) => {
-  console.log(`New hire: ${payload.employee.email}`);
-});
+// Subscribe
+payroll.on('employee:hired', (payload) => { ... });
+payroll.on('employee:terminated', (payload) => { ... });
+payroll.on('employee:rehired', (payload) => { ... });
+payroll.on('salary:processed', (payload) => { ... });
+payroll.on('salary:failed', (payload) => { ... });
+payroll.on('payroll:completed', (payload) => { ... });
+payroll.on('compensation:changed', (payload) => { ... });
+payroll.on('leave:requested', (payload) => { ... });
+payroll.on('leave:approved', (payload) => { ... });
+payroll.on('leave:rejected', (payload) => { ... });
 
-payroll.on('payroll:processed', (payload) => {
-  console.log(`Salary processed: ${payload.payrollRecord.id}`);
-});
+// Unsubscribe
+payroll.off('employee:hired', handler);
 
-payroll.on('leave:requested', (payload) => {
-  console.log(`Leave request: ${payload.leaveRequest.id}`);
-});
+// One-time listener
+payroll.once('salary:processed', (payload) => { ... });
 ```
 
-### Available Events
-
-- `employee:hired`
-- `employee:terminated`
-- `employee:rehired`
-- `compensation:updated`
-- `salary:processed`
-- `payroll:processed`
-- `payroll:paid`
-- `leave:requested`
-- `leave:approved`
-- `leave:rejected`
+---
 
 ## Webhooks
 
-### Register Webhook
+### registerWebhook
 
 ```typescript
 await payroll.registerWebhook({
-  organizationId,
-  url: 'https://api.example.com/webhooks/payroll',
-  events: ['payroll:processed', 'employee:hired'],
-  secret: 'your-webhook-secret',
+  organizationId: ObjectId,
+  url: string,                   // HTTPS endpoint
+  events: string[],              // Event types to receive
+  secret: string,                // For signature verification
+  enabled?: boolean,             // Default: true
 });
 ```
 
-### Verify Webhook Signature
+### Webhook Payload
 
 ```typescript
-import crypto from 'crypto';
-
-function verifyWebhook(req, secret) {
-  const signature = req.headers['x-payroll-signature'];
-  const timestamp = req.headers['x-payroll-timestamp'];
-
-  // Check timestamp freshness (5 min window)
-  const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - parseInt(timestamp)) > 300) {
-    throw new Error('Signature expired');
-  }
-
-  // Verify HMAC
-  const signedPayload = `${timestamp}.${JSON.stringify(req.body)}`;
-  const expectedSig = crypto
-    .createHmac('sha256', secret)
-    .update(signedPayload)
-    .digest('hex');
-
-  const providedSig = signature.split('v1=')[1];
-
-  if (providedSig !== expectedSig) {
-    throw new Error('Invalid signature');
-  }
-
-  return true;
+{
+  id: string,                    // Webhook delivery ID
+  event: string,                 // Event type
+  timestamp: number,             // Unix timestamp
+  data: { ... },                 // Event-specific payload
 }
 ```
 
-## Models & Schemas
-
-### Using Built-in Models
+### Signature Verification
 
 ```typescript
-import { getEmployeeModel, getPayrollRecordModel } from '@classytic/payroll';
+const signature = req.headers['x-payroll-signature'];  // v1=<hmac>
+const timestamp = req.headers['x-payroll-timestamp'];
 
-const Employee = getEmployeeModel();
-const PayrollRecord = getPayrollRecordModel();
+// Verify timestamp (reject if >5 min old)
+const now = Math.floor(Date.now() / 1000);
+if (Math.abs(now - parseInt(timestamp)) > 300) {
+  throw new Error('Signature expired');
+}
+
+// Verify signature
+const signedPayload = `${timestamp}.${JSON.stringify(req.body)}`;
+const expectedSig = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
+const providedSig = signature.split('v1=')[1];
+
+if (providedSig !== expectedSig) {
+  throw new Error('Invalid signature');
+}
 ```
 
-### Custom Employee Schema
-
-```typescript
-import { createEmployeeSchema, createEmploymentFields } from '@classytic/payroll';
-import { Schema, model } from 'mongoose';
-
-// Option 1: Use schema factory with additional fields
-const employeeSchema = createEmployeeSchema({
-  certifications: [{ name: String, issuedDate: Date }],
-  skills: [String],
-});
-
-// Option 2: Spread fields into your own schema
-const customSchema = new Schema({
-  ...createEmploymentFields({ organizationRef: 'Branch' }), // Multi-branch support
-  certifications: [{ name: String, issuedDate: Date }],
-  skills: [String],
-});
-
-const Employee = model('Employee', employeeSchema);
-```
-
-### Custom Transaction Schema
-
-```typescript
-const transactionSchema = new Schema({
-  organizationId: { type: Schema.Types.ObjectId, required: true },
-  type: String,
-  flow: String, // 'inflow' or 'outflow'
-  grossAmount: Number, // v3.0: Gross amount (before deductions)
-  amount: Number, // v3.0: Net amount (actual payment)
-  tax: Number,
-  currency: String,
-  metadata: Schema.Types.Mixed,
-});
-
-const Transaction = model('Transaction', transactionSchema);
-```
+---
 
 ## Configuration
-
-### Full Configuration
 
 ```typescript
 const payroll = createPayrollInstance()
   .withModels({
-    EmployeeModel,
-    PayrollRecordModel,
-    TransactionModel,
-    AttendanceModel,
-    LeaveRequestModel,
+    EmployeeModel: Model<EmployeeDocument>,
+    PayrollRecordModel: Model<PayrollRecordDocument>,
+    TransactionModel: Model<TransactionDocument>,
+    AttendanceModel?: Model<AttendanceDocument>,    // Optional
+    LeaveRequestModel?: Model<LeaveRequestDocument>, // Optional
   })
   .withConfig({
-    currency: 'USD',
+    currency: string,            // Default currency code
     payroll: {
-      attendanceIntegration: true,
-      autoCreateTransaction: true,
-      enableIdempotency: true,
+      attendanceIntegration: boolean,
+      autoCreateTransaction: boolean,
+      enableIdempotency: boolean,
+      allowProRating: boolean,
     },
     leave: {
-      enabled: true,
-      accrualStartMonth: 1,
+      enabled: boolean,
+      accrualStartMonth: number,
       defaultBalances: {
-        annual: 20,
-        sick: 10,
-        casual: 5,
+        annual: number,
+        sick: number,
+        casual: number,
       },
     },
   })
+  .forSingleTenant({             // Optional: single-tenant mode
+    organizationId: ObjectId,
+    autoInject: boolean,
+  })
   .build();
 ```
 
-## TypeScript Types
+---
+
+## Types Reference
+
+### Allowance
 
 ```typescript
-import type {
-  EmployeeDocument,
-  PayrollRecordDocument,
-  LeaveRequestDocument,
-  EmployeeStatus,
-  PayrollStatus,
-  LeaveType,
-  LeaveStatus,
-} from '@classytic/payroll';
-```
-
-## Error Handling
-
-```typescript
-try {
-  await payroll.processSalary({ employeeId, period });
-} catch (error) {
-  if (error.code === 'DUPLICATE_PAYROLL') {
-    console.log('Already processed');
-  } else if (error.code === 'EMPLOYEE_NOT_FOUND') {
-    console.log('Employee does not exist');
-  } else {
-    throw error;
-  }
+interface Allowance {
+  type: AllowanceType,
+  name?: string,
+  amount: number,
+  isPercentage?: boolean,        // Amount is percentage of base
+  value?: number,                // Percentage value if isPercentage
+  taxable?: boolean,
+  recurring?: boolean,
+  effectiveFrom?: Date,
+  effectiveTo?: Date | null,
 }
 ```
 
-## Multi-Tenant Setup
+### Deduction
 
 ```typescript
-import { Repository } from '@classytic/mongokit';
-import { multiTenantPlugin } from '@classytic/payroll/plugins';
+interface Deduction {
+  type: DeductionType,
+  name?: string,
+  amount: number,
+  isPercentage?: boolean,
+  value?: number,
+  auto?: boolean,
+  recurring?: boolean,
+  effectiveFrom?: Date,
+  effectiveTo?: Date | null,
+  description?: string,
+  reducesTaxableIncome?: boolean,
+}
+```
 
-const organizationId = new ObjectId('...');
+### TaxBracket
 
-const employeeRepo = new Repository(EmployeeModel, [
-  multiTenantPlugin(organizationId),
-]);
+```typescript
+interface TaxBracket {
+  min: number,                   // Minimum income for bracket
+  max: number,                   // Maximum income for bracket
+  rate: number,                  // Tax rate (0-1)
+  effectiveFrom?: Date,          // When bracket becomes active
+  effectiveTo?: Date | null,     // When bracket expires
+}
+```
 
-const payroll = createPayrollInstance()
-  .withRepository('employee', employeeRepo)
-  .withModels({ PayrollRecordModel, TransactionModel })
-  .build();
+### PayrollBreakdown
+
+```typescript
+interface PayrollBreakdown {
+  baseAmount: number,
+  allowances: Array<{ type, amount, taxable? }>,
+  deductions: Array<{ type, amount, description? }>,
+  grossSalary: number,
+  netSalary: number,
+  taxableAmount?: number,
+  taxAmount?: number,
+  workingDays?: number,
+  actualDays?: number,
+  proRatedAmount?: number,
+  attendanceDeduction?: number,
+}
+```
+
+### Compensation
+
+```typescript
+interface Compensation {
+  baseAmount: number,                                      // Per-period amount
+  frequency: 'monthly' | 'bi_weekly' | 'weekly' | 'daily' | 'hourly',
+  currency: string,
+  allowances: Allowance[],
+  deductions: Deduction[],
+  grossSalary?: number,
+  netSalary?: number,
+  effectiveFrom?: Date,
+}
+```
+
+#### Payment Frequencies
+
+| Frequency | baseAmount | Periods/Year | Pay Period Calculation |
+|-----------|------------|--------------|------------------------|
+| `monthly` | Monthly salary | 12 | Full calendar month |
+| `bi_weekly` | Bi-weekly wage | 26 | 14 days ending on paymentDate |
+| `weekly` | Weekly wage | 52 | 7 days ending on paymentDate |
+| `daily` | Daily rate | 365 | Single day (paymentDate) |
+| `hourly` | Hourly rate | 2080 | Single day (paymentDate) |
+
+**Tax Calculation**: Taxes are annualized based on frequency. A weekly employee earning $2,000/week has the same annual tax burden as a monthly employee earning $8,666.67/month (~$104,000/year).
+
+**nextPaymentDate**: Automatically calculated based on frequency after each payroll run.
+
+---
+
+## Error Classes
+
+```typescript
+import {
+  PayrollError,            // Base error class
+  NotInitializedError,     // Payroll not initialized
+  EmployeeNotFoundError,   // Employee doesn't exist
+  InvalidEmployeeError,    // Invalid employee data
+  DuplicatePayrollError,   // Already processed for period
+  NotEligibleError,        // Employee not eligible
+  EmployeeTerminatedError, // Employee is terminated
+  AlreadyProcessedError,   // Operation already completed
+  ValidationError,         // Validation failed
+  SecurityError,           // Security violation
+} from '@classytic/payroll';
+
+// Error properties
+error.code      // Error code string
+error.message   // Human-readable message
+error.details   // Additional context
 ```

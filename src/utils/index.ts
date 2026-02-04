@@ -234,5 +234,19 @@ export {
   type EmployeeQueryFilter,
 } from './employee-identity.js';
 
+// ============================================================================
+// Error Helpers (High-Level Error Handling)
+// ============================================================================
+
+export {
+  handleTransactionError,
+  handleDuplicateKeyError,
+  handlePayrollError,
+  formatUserError,
+  type TransactionErrorResult,
+  type DuplicateKeyErrorResult,
+  type PayrollErrorResult,
+} from './error-helpers.js';
+
 // Note: buildEmployeeQuery from employee-identity.js is intentionally not exported
 // to avoid naming conflict with query-builders.js. It's used internally by findEmployeeSecure.

@@ -13,6 +13,17 @@ export default defineConfig({
     },
     testTimeout: 30000,
     hookTimeout: 120000,
+    // Limit parallelism to prevent MongoDB memory exhaustion
+    // Each test file spawns its own MongoMemoryServer (~100-200MB each)
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        maxForks: 4,  // Limit concurrent test files
+        minForks: 1,
+      },
+    },
+    // Ensure cleanup even on test failures
+    teardownTimeout: 10000,
   },
 });
 

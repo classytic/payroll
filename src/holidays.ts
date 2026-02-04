@@ -5,13 +5,13 @@
  * ONE way to manage holidays - no confusion.
  */
 
-import { Schema, type Model } from 'mongoose';
+import { Schema, type Model, type Types, type SchemaDefinition } from 'mongoose';
 
 /**
  * Holiday document
  */
 export interface Holiday {
-  organizationId?: any;
+  organizationId?: Types.ObjectId;
   date: Date;
   name: string;
   type: 'public' | 'company' | 'religious';
@@ -35,7 +35,7 @@ export interface Holiday {
 export function createHolidaySchema(options: {
   singleTenant?: boolean;
 } = {}): Schema {
-  const fields: any = {
+  const fields: Record<string, unknown> = {
     date: { type: Date, required: true },
     name: { type: String, required: true },
     type: { 
@@ -54,7 +54,7 @@ export function createHolidaySchema(options: {
     };
   }
 
-  const schema = new Schema(fields, { timestamps: true });
+  const schema = new Schema(fields as unknown as SchemaDefinition, { timestamps: true });
 
   // Indexes
   if (!options.singleTenant) {
@@ -79,14 +79,14 @@ export function createHolidaySchema(options: {
  * ```
  */
 export async function getHolidays(
-  HolidayModel: Model<any>,
+  HolidayModel: Model<Holiday>,
   params: {
-    organizationId?: any;
+    organizationId?: Types.ObjectId;
     startDate: Date;
     endDate: Date;
   }
 ): Promise<Date[]> {
-  const query: any = {
+  const query: Record<string, unknown> = {
     date: { $gte: params.startDate, $lte: params.endDate },
   };
 

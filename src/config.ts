@@ -109,16 +109,21 @@ export const SALARY_BANDS: Record<Exclude<SalaryBand, 'custom'>, SalaryBandRange
 
 // ============================================================================
 // Tax Brackets Configuration
+//
+// These brackets represent progressive tax rates AFTER the tax-free threshold.
+// The threshold is handled separately via jurisdictionTaxConfig.standardDeduction
+// or thresholdsByCategory. Do NOT include a 0% bracket for the tax-free amount —
+// that would cause a double deduction when used with standardDeduction.
 // ============================================================================
 
 export const TAX_BRACKETS: Record<string, TaxBracket[]> = {
+  // Bangladesh FY 2024-25 rates (after tax-free threshold)
   BDT: [
-    { min: 0, max: 300000, rate: 0 },
-    { min: 300000, max: 400000, rate: 0.05 },
-    { min: 400000, max: 500000, rate: 0.10 },
-    { min: 500000, max: 600000, rate: 0.15 },
-    { min: 600000, max: 3000000, rate: 0.20 },
-    { min: 3000000, max: Infinity, rate: 0.25 },
+    { min: 0, max: 100000, rate: 0.05 },
+    { min: 100000, max: 400000, rate: 0.10 },
+    { min: 400000, max: 700000, rate: 0.15 },
+    { min: 700000, max: 1100000, rate: 0.20 },
+    { min: 1100000, max: Infinity, rate: 0.25 },
   ],
   USD: [
     { min: 0, max: 10000, rate: 0.10 },
@@ -291,7 +296,7 @@ export function getPayPeriodsPerYear(frequency: PaymentFrequency): number {
  */
 export function toMonthlyAmount(amount: number, frequency: PaymentFrequency): number {
   const periodsPerYear = getPayPeriodsPerYear(frequency);
-  return Math.round((amount * periodsPerYear) / 12);
+  return roundMoney((amount * periodsPerYear) / 12, 2);
 }
 
 /**
@@ -299,7 +304,7 @@ export function toMonthlyAmount(amount: number, frequency: PaymentFrequency): nu
  */
 export function toAnnualAmount(amount: number, frequency: PaymentFrequency): number {
   const periodsPerYear = getPayPeriodsPerYear(frequency);
-  return Math.round(amount * periodsPerYear);
+  return roundMoney(amount * periodsPerYear, 2);
 }
 
 /**

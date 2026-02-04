@@ -11,6 +11,7 @@ import type {
   TaxConfiguration,
 } from '../types.js';
 import { requireJurisdiction } from '../registry.js';
+import { roundMoney } from '../../utils/money.js';
 
 // ============================================================================
 // Tax Calculation
@@ -162,7 +163,7 @@ function calculateIncomeTax(
     tax += bracketTax + (bracket.fixedAmount || 0);
   }
 
-  return Math.round(tax);
+  return roundMoney(tax, 2);
 }
 
 /**
@@ -187,8 +188,8 @@ function calculateSocialSecurity(
     taxableIncome = config.ceiling;
   }
 
-  const employeeAmount = Math.round(taxableIncome * config.employeeRate);
-  const employerAmount = Math.round(taxableIncome * config.employerRate);
+  const employeeAmount = roundMoney(taxableIncome * config.employeeRate, 2);
+  const employerAmount = roundMoney(taxableIncome * config.employerRate, 2);
 
   return { employeeAmount, employerAmount };
 }
@@ -204,14 +205,14 @@ function calculateMedicare(
     return { employeeAmount: 0, employerAmount: 0 };
   }
 
-  let employeeAmount = Math.round(annualIncome * config.employeeRate);
-  const employerAmount = Math.round(annualIncome * config.employerRate);
+  let employeeAmount = roundMoney(annualIncome * config.employeeRate, 2);
+  const employerAmount = roundMoney(annualIncome * config.employerRate, 2);
 
   // Additional medicare tax for high earners
   if (config.additionalRate && config.additionalThreshold) {
     if (annualIncome > config.additionalThreshold) {
       const additionalIncome = annualIncome - config.additionalThreshold;
-      employeeAmount += Math.round(additionalIncome * config.additionalRate);
+      employeeAmount += roundMoney(additionalIncome * config.additionalRate, 2);
     }
   }
 
@@ -235,7 +236,7 @@ function calculateUnemployment(
     taxableIncome = config.ceiling;
   }
 
-  return Math.round(taxableIncome * config.employerRate);
+  return roundMoney(taxableIncome * config.employerRate, 2);
 }
 
 /**
@@ -253,11 +254,11 @@ function calculateOtherContributions(
     }
 
     const employeeAmount = contrib.employeeRate
-      ? Math.round(taxableIncome * contrib.employeeRate)
+      ? roundMoney(taxableIncome * contrib.employeeRate, 2)
       : 0;
 
     const employerAmount = contrib.employerRate
-      ? Math.round(taxableIncome * contrib.employerRate)
+      ? roundMoney(taxableIncome * contrib.employerRate, 2)
       : 0;
 
     return {
@@ -303,10 +304,10 @@ export function calculateMonthlyTax(
   });
 
   return {
-    monthlyIncomeTax: Math.round(result.incomeTax / 12),
-    monthlySocialSecurity: Math.round(result.socialSecurityEmployee / 12),
-    monthlyMedicare: Math.round(result.medicareEmployee / 12),
-    monthlyTotal: Math.round(result.totalEmployeeTax / 12),
+    monthlyIncomeTax: roundMoney(result.incomeTax / 12, 2),
+    monthlySocialSecurity: roundMoney(result.socialSecurityEmployee / 12, 2),
+    monthlyMedicare: roundMoney(result.medicareEmployee / 12, 2),
+    monthlyTotal: roundMoney(result.totalEmployeeTax / 12, 2),
     effectiveRate: result.effectiveRate,
   };
 }

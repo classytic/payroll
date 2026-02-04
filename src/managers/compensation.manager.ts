@@ -8,8 +8,12 @@
  * - Bank account details
  */
 
+import type { ClientSession } from 'mongoose';
 import type {
   EmployeeDocument,
+  PayrollRecordDocument,
+  AnyDocument,
+  LeaveRequestDocument,
   ObjectId,
   ObjectIdLike,
   UpdateSalaryParams,
@@ -23,10 +27,12 @@ import type {
   Deduction,
 } from '../types.js';
 import { getLogger } from '../utils/logger.js';
-import { EmployeeTerminatedError } from '../errors/index.js';
+import { EmployeeTerminatedError, ValidationError } from '../errors/index.js';
 import type { EventBus } from '../core/events.js';
 import type { PayrollRepositories } from '../types.js';
 import { hasPluginMethod } from '../utils/validation.js';
+import type { FindEmployeeFn, ResolveEmployeeIdFn } from './context.js';
+import type { RequestScopedServices } from './repository.manager.js';
 
 /**
  * CompensationManager
@@ -67,20 +73,17 @@ import { hasPluginMethod } from '../utils/validation.js';
  * ```
  */
 export class CompensationManager<
-  TEmployee extends EmployeeDocument = EmployeeDocument
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument
 > {
   constructor(
     private readonly events: EventBus,
     private readonly resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-    private readonly resolveEmployeeIdFn: (
-      employeeId: ObjectIdLike | string,
-      employeeIdMode: 'auto' | 'objectId' | 'businessId' | undefined,
-      organizationId: ObjectIdLike,
-      session?: any
-    ) => Promise<ObjectId>,
-    private readonly findEmployeeFn: (params: any) => Promise<TEmployee>,
-    private readonly getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, any, any, any>,
-    private readonly getServicesForRequestFn: (repos: any) => any
+    private readonly resolveEmployeeIdFn: ResolveEmployeeIdFn,
+    private readonly findEmployeeFn: FindEmployeeFn<TEmployee>,
+    private readonly getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+    private readonly getServicesForRequestFn: (repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>) => RequestScopedServices<TEmployee, TPayrollRecord>
   ) {}
 
   /**
@@ -229,7 +232,7 @@ export class CompensationManager<
     const after = employee.compensation.allowances?.length || 0;
 
     if (before === after) {
-      throw new Error(`Allowance type '${type}' not found`);
+      throw new ValidationError(`Allowance type '${type}' not found`);
     }
 
     await employee.save({ session });
@@ -332,7 +335,7 @@ export class CompensationManager<
     const after = employee.compensation.deductions?.length || 0;
 
     if (before === after) {
-      throw new Error(`Deduction type '${type}' not found`);
+      throw new ValidationError(`Deduction type '${type}' not found`);
     }
 
     await employee.save({ session });
@@ -379,20 +382,17 @@ export class CompensationManager<
  * Factory function for creating CompensationManager
  */
 export function createCompensationManager<
-  TEmployee extends EmployeeDocument = EmployeeDocument
+  TEmployee extends EmployeeDocument = EmployeeDocument,
+  TPayrollRecord extends PayrollRecordDocument = PayrollRecordDocument,
+  TTransaction extends AnyDocument = AnyDocument
 >(
   events: EventBus,
   resolveOrganizationIdFn: (providedOrgId?: ObjectIdLike) => ObjectId,
-  resolveEmployeeIdFn: (
-    employeeId: ObjectIdLike | string,
-    employeeIdMode: 'auto' | 'objectId' | 'businessId' | undefined,
-    organizationId: ObjectIdLike,
-    session?: any
-  ) => Promise<ObjectId>,
-  findEmployeeFn: (params: any) => Promise<TEmployee>,
-  getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, any, any, any>,
-  getServicesForRequestFn: (repos: any) => any
-): CompensationManager<TEmployee> {
+  resolveEmployeeIdFn: ResolveEmployeeIdFn,
+  findEmployeeFn: FindEmployeeFn<TEmployee>,
+  getReposForRequestFn: (orgId: ObjectId) => PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>,
+  getServicesForRequestFn: (repos: PayrollRepositories<TEmployee, TPayrollRecord, LeaveRequestDocument, TTransaction>) => RequestScopedServices<TEmployee, TPayrollRecord>
+): CompensationManager<TEmployee, TPayrollRecord, TTransaction> {
   return new CompensationManager(
     events,
     resolveOrganizationIdFn,

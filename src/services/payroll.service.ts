@@ -33,10 +33,13 @@ import type { EmployeeService } from './employee.service.js';
 // Payroll Service (Mongokit Refactored)
 // ============================================================================
 
-export class PayrollService {
+export class PayrollService<
+  T extends PayrollRecordDocument = PayrollRecordDocument,
+  TEmployee extends EmployeeDocument = EmployeeDocument
+> {
   constructor(
-    private readonly payrollRepo: Repository<PayrollRecordDocument>,
-    private readonly employeeService: EmployeeService
+    private readonly payrollRepo: Repository<T>,
+    private readonly employeeService: EmployeeService<TEmployee>
   ) {}
 
   /**
@@ -155,13 +158,13 @@ export class PayrollService {
     data: PayrollData,
     options: { session?: ClientSession } = {}
   ): Promise<PayrollRecordDocument> {
-    const payroll = await this.payrollRepo.create(data as any, {
+    const payroll = await this.payrollRepo.create(data as unknown as Partial<T>, {
       session: options.session,
     });
 
     logger.info('Payroll record created', {
       payrollId: payroll._id.toString(),
-      employeeId: (payroll as any).employeeId.toString(),
+      employeeId: payroll.employeeId.toString(),
     });
 
     return payroll;
@@ -271,7 +274,7 @@ export class PayrollService {
       );
     }
 
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       status: 'paid',
       paidAt: resolvedOptions.paidAt || new Date(),
     };
@@ -343,7 +346,7 @@ export class PayrollService {
     }
 
     // Add correction using document method
-    (payroll as any).addCorrection(previousAmount, newAmount, reason, toObjectId(correctedBy));
+    payroll.addCorrection(previousAmount, newAmount, reason, toObjectId(correctedBy));
 
     await payroll.save({ session: options.session });
 
@@ -447,11 +450,14 @@ export class PayrollService {
 /**
  * Factory function to create PayrollService
  */
-export function createPayrollService(
-  payrollRepo: Repository<PayrollRecordDocument>,
-  employeeService: EmployeeService
-): PayrollService {
-  return new PayrollService(payrollRepo, employeeService);
+export function createPayrollService<
+  T extends PayrollRecordDocument = PayrollRecordDocument,
+  TEmployee extends EmployeeDocument = EmployeeDocument
+>(
+  payrollRepo: Repository<T>,
+  employeeService: EmployeeService<TEmployee>
+): PayrollService<T, TEmployee> {
+  return new PayrollService<T, TEmployee>(payrollRepo, employeeService);
 }
 
 export default PayrollService;

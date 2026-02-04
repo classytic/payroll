@@ -226,24 +226,69 @@ const payrollRecordSchema = new Schema(
 // Indexes
 // ============================================================================
 
+/**
+ * UNIQUE Compound Index (v2.8.0+)
+ *
+ * Prevents duplicate payrolls at the database level for the same:
+ * - Organization
+ * - Employee
+ * - Period (month + year)
+ * - Payroll run type (regular, supplemental, retroactive, off-cycle)
+ *
+ * This is the PRIMARY duplicate protection. Application-level checks are secondary.
+ * Allows multiple run types per period (e.g., regular + supplemental bonus).
+ *
+ * Duplicate inserts will fail with MongoDB E11000 error, which is caught and
+ * converted to DuplicatePayrollError by the salary processing manager.
+ *
+ * Partial filter: Only enforce uniqueness for active statuses.
+ * Voided and reversed records are excluded to allow re-processing.
+ * Uses $exists to be compatible with MongoDB partial index expressions.
+ */
+payrollRecordSchema.index(
+  {
+    organizationId: 1,
+    employeeId: 1,
+    'period.month': 1,
+    'period.year': 1,
+    payrollRunType: 1,
+  },
+  {
+    unique: true,
+    name: 'unique_payroll_per_period_runtype',
+    // Partial filter: only enforce for records where isVoided is false
+    // Uses $eq which is supported in MongoDB partial filter expressions
+    // When a record is voided, isVoided is set to true, excluding it from the index
+    partialFilterExpression: {
+      isVoided: { $eq: false },
+    },
+  }
+);
+
+// Composite index for common queries (organization + period)
 payrollRecordSchema.index({ organizationId: 1, 'period.month': 1, 'period.year': 1 });
-payrollRecordSchema.index({ employeeId: 1, 'period.month': 1, 'period.year': 1 }, { unique: true });
+
+// Employee + period lookup (for history queries)
+payrollRecordSchema.index({ employeeId: 1, 'period.month': 1, 'period.year': 1 });
+
+// Status queries
 payrollRecordSchema.index({ organizationId: 1, status: 1 });
+
+// Payroll run type queries (supplemental, retroactive, etc.)
+payrollRecordSchema.index({ organizationId: 1, payrollRunType: 1, 'period.year': 1, 'period.month': 1 });
 
 /**
  * TTL Index Configuration
  *
  * Standard approach: Use expireAt field with MongoDB TTL index.
- * The index is configured dynamically via configureRetention() method.
- *
  * Documents expire when expireAt date is reached. If expireAt is not set,
- * it can be auto-calculated based on createdAt + retention period.
+ * the document never expires (undefined = no TTL).
  *
  * MongoDB deletes expired documents approximately 60 seconds after expiration.
  *
- * @see configureRetention() method to set up TTL index
+ * Set expireAt per-document for jurisdiction-specific retention requirements.
  */
-payrollRecordSchema.index({ expireAt: 1 });
+payrollRecordSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
 
 // ============================================================================
 // Virtuals

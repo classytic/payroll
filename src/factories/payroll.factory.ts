@@ -16,6 +16,7 @@ import type {
 } from '../types.js';
 import { getPayPeriod } from '../utils/date.js';
 import { calculateGross, calculateNet, sumAllowances, sumDeductions } from '../utils/calculation.js';
+import { roundMoney } from '../utils/money.js';
 import { HRM_CONFIG } from '../config.js';
 
 // ============================================================================
@@ -123,7 +124,7 @@ export class PayrollFactory {
     return allowances.map((allowance) => {
       const amount =
         allowance.isPercentage && allowance.value !== undefined
-          ? Math.round((baseAmount * allowance.value) / 100)
+          ? roundMoney((baseAmount * allowance.value) / 100, 2)
           : allowance.amount;
 
       return {
@@ -144,7 +145,7 @@ export class PayrollFactory {
     return deductions.map((deduction) => {
       const amount =
         deduction.isPercentage && deduction.value !== undefined
-          ? Math.round((baseAmount * deduction.value) / 100)
+          ? roundMoney((baseAmount * deduction.value) / 100, 2)
           : deduction.amount;
 
       return {
